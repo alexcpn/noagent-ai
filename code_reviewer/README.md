@@ -3,7 +3,7 @@
 
 
 The MCP server exposes a method that gives the context of a Python function  and details about it including callee. 
-This is in [tools\code_indexer.py](code_reviewer/code_review_mcp_server/tools/code_indexer.py)
+This is in [tools\code_indexer.py](code_review_mcp_server/tools/code_indexer.py)
 
 This tool is available to the LLM to get context for reviewing code snippet given to it in the repo
 
@@ -22,15 +22,17 @@ Uses uv as the python package manager
 ## Running the Server on HTTP
 
 ```
-uv sync
-source .venv/bin/activate
-uv run code_review_mcp_server/fastmcp_server.py
+cd noframework.ai/code_reviewer
+uv sync && source .venv/bin/activate
+noframework.ai/code_reviewer$ uv run code_review_mcp_server/fastmcp_server.py
 ```
 
 ## Running the Client to test the MCP Server
 
 ```
- uv run code_review_mcp_server/fastmcp_client.py
+cd noframework.ai/code_reviewer
+uv sync && source .venv/bin/act
+ noframework.ai/code_reviewer$ uv run code_review_mcp_server/fastmcp_client.py
 ```
 
 
