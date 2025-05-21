@@ -3,7 +3,7 @@
 
 
 The MCP server exposes a method that gives the context of a Python function  and details about it including callee. 
-This is in [tools\code_indexer.py](tools\code_indexer.py)
+This is in [tools\code_indexer.py](code_reviewer/code_review_mcp_server/tools/code_indexer.py)
 
 This tool is available to the LLM to get context for reviewing code snippet given to it in the repo
 
