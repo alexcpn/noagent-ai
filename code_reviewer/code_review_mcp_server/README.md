@@ -13,7 +13,9 @@ https://huggingface.co/spaces/alexcpn/code_review_mcp_server/tree/main
 
 And the Server is running at https://alexcpn-code-review-mcp-server.hf.space/mcp
 
-You can Run the MCP Client like
+You can Run the MCP Client like below:
+
+[MCP Client Colab Notebook](https://colab.research.google.com/drive/11xryaGH28jpTSd-V2NJ3j5WQJLzr14j4?usp=sharing)
 
 ```
  async with Client("https://alexcpn-code-review-mcp-server.hf.space/mcp") as client:
