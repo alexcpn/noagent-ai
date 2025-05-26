@@ -9,10 +9,11 @@ from tree_sitter import Parser
 import tempfile
 import os
 from git import Repo
+from enum import Enum
 
-language      = "python"
-lang          = get_language(language)
-parser        = Parser();  parser.set_language(lang)
+
+parser        = Parser()
+
 
 all_refs = {}  # store all classes and functions in a dict
 code_ref ={} # hold the code bytes
@@ -29,28 +30,69 @@ def _collect_files(root_dir, extensions=None):
 # ---------------------------------------------------------------------------
 # Python queries from https://github.com/sankalp1999/code_qa/blob/fe6ce9d852aa1c371c299db22978012df4b354a0/treesitter.py#L16
 # ---------------------------------------------------------------------------
-_python_query = {
-    "class": """
-        (class_definition
-        name: (identifier) @class.name)
-    """,
-    "func": """
-        (function_definition
-        name: (identifier) @function.name)
-    """,
-    "doc": """
-        (expression_statement (string) @docstring)
-    """,
-}
 
+
+class LanguageEnum(Enum):
+    UNKNOWN = "unknown"
+    
+    PYTHON= {
+        "class": """
+            (class_definition
+            name: (identifier) @class.name)
+        """,
+        "func": """
+            (function_definition
+            name: (identifier) @function.name)
+        """,
+        "doc": """
+            (expression_statement (string) @docstring)
+        """,
+    }
+    
+    GO = {
+    # Match struct type declarations:
+    #   type Foo struct { … }
+    'struct_query': r"""
+        (type_spec
+            name: (type_identifier) @struct.name
+            type: (struct_type))
+    """,
+
+    # Match both top-level functions and methods:
+    #   func Bar(...) { … }
+    #   func (r Receiver) Baz(...) { … }
+    'func_query': r"""
+        [
+            (function_declaration
+                name: (identifier) @func.name)
+            (method_declaration
+                name: (field_identifier) @method.name)
+        ]
+    """,
+
+    # Capture all comments (line or block) for docstrings:
+    #   // comment
+    #   /* comment */
+    'doc_query': r"""
+        (comment) @comment
+    """
+}
 # ---------------------------------------------------------------------------
 #  run the query and grab the captures
 # ---------------------------------------------------------------------------
-def _run_query(code_bytes,q_src, tag):
+def _run_query(code_bytes,q_src, tag,language):
     """
     Return a list of dicts: {node, name, start_line, end_line}
     for every capture whose capture-name == tag.
     """
+    if language == "python":
+        lang = get_language("python")
+        parser.set_language(lang)
+    elif language == "go":
+        lang = get_language("go")
+        parser.set_language(lang)
+    else:       
+        raise ValueError(f"Unsupported language: {language}")
     query     = lang.query(q_src)
     root      = parser.parse(code_bytes).root_node
     captures  = query.captures(root)                 # [(node, capture_name), …]
@@ -104,25 +146,43 @@ def _build_call_query(target_name: str):
     # 1) Bare calls:   (call function: (identifier) @call.name)
     # 2) Attr calls:   (call function: (attribute object: _ attribute: (identifier) @call.name))
     # We capture the entire call node as @call.node so we can get its position.
-    return get_language("python").query(f"""
-    (
-      (call
-         function: (identifier) @call.name
-         arguments: (_)*
-      ) @call.node
-      (#eq? @call.name "{target_name}")
-    )
-    (
-      (call
-         function: (attribute
-                     object: (_)
-                     attribute: (identifier) @call.name
-                   )
-         arguments: (_)*
-      ) @call.node
-      (#eq? @call.name "{target_name}")
-    )
-    """)
+    # find if this is a python or go file
+    if target_name.startswith("python."):
+        
+        return get_language("python").query(f"""
+        (
+        (call
+            function: (identifier) @call.name
+            arguments: (_)*
+        ) @call.node
+        (#eq? @call.name "{target_name}")
+        )
+        (
+        (call
+            function: (attribute
+                        object: (_)
+                        attribute: (identifier) @call.name
+                    )
+            arguments: (_)*
+        ) @call.node
+        (#eq? @call.name "{target_name}")
+        )
+        """)
+    elif target_name.startswith("go."):
+        return get_language("go").query(f"""
+        (
+            (call_expression
+                function: (identifier) @call.name
+                arguments: (_)*
+            ) @call.node
+            (#eq? @call.name "{target_name}")
+        )
+        (
+            (call_expression
+                function: (selector_expression
+                    operand: (_)
+        
+        """)
 
 def _get_enclosing_function(node, code_bytes):
     """
@@ -183,26 +243,51 @@ def find_call_sites(code_bytes: bytes, target_name: str):
 def index_all_files(project_root,git_repo_url):
     all_classes = []
     all_functions = []
-    all_files = _collect_files(project_root, [".py"])
+    all_files = _collect_files(project_root, [".py",".go"])
     for path in all_files:
         with open(path, "r", encoding="utf8") as f:
             code = f.read()
             code_bytes    = code.encode()
-            classes   = _run_query(code_bytes,_python_query["class"], "class.name")
-            functions = _run_query(code_bytes,_python_query["func"],  "function.name")
-            docs      = _run_query(code_bytes,_python_query["doc"],   "docstring")   # optional
-            classes   = _attach_docstrings(code_bytes,classes,docs)
-            functions = _attach_docstrings(code_bytes,functions,docs)
-            # get the file name and previous directory
-            # get only file name and relative path
-            file_name = os.path.basename(path)
-            rel_path      = os.path.relpath(path, project_root)
-            print(f"Processing {file_name} ({len(classes)} classes, {len(functions)} functions), {rel_path})")
-            classes   = _attach_file_name(classes, rel_path)
-            functions = _attach_file_name(functions, rel_path)
-            code_ref[git_repo_url+rel_path] =code_bytes
-            all_classes.extend(classes)
-            all_functions.extend(functions)
+            print(f"Processing {path}")
+            language = LanguageEnum.UNKNOWN.value
+            if path.endswith(".py"):
+                language = LanguageEnum.PYTHON.value
+                classes   = _run_query(code_bytes,language["class"], "class.name","python")
+                functions = _run_query(code_bytes,language["func"],  "function.name","python")
+                docs      = _run_query(code_bytes,language["doc"],   "docstring","python")   # optional
+                classes   = _attach_docstrings(code_bytes,classes,docs)
+                functions = _attach_docstrings(code_bytes,functions,docs)
+                # get the file name and previous directory
+                # get only file name and relative path
+                file_name = os.path.basename(path)
+                rel_path      = os.path.relpath(path, project_root)
+                print(f"Processing {file_name} ({len(classes)} classes, {len(functions)} functions), {rel_path})")
+                classes   = _attach_file_name(classes, rel_path)
+                functions = _attach_file_name(functions, rel_path)
+                code_ref[git_repo_url+rel_path] =code_bytes
+                all_classes.extend(classes)
+                all_functions.extend(functions)
+            elif path.endswith(".go"):
+                language = LanguageEnum.GO.value
+                # fill for Go language
+                structs   = _run_query(code_bytes,language["struct_query"], "struct.name","go")
+                functions = _run_query(code_bytes,language["func_query"],  "func.name","go")
+                docs      = _run_query(code_bytes,language["doc_query"],   "comment","go")
+                structs   = _attach_docstrings(code_bytes,structs,docs)
+                functions = _attach_docstrings(code_bytes,functions,docs)
+                # get the file name and previous directory
+                file_name = os.path.basename(path)
+                rel_path      = os.path.relpath(path, project_root)
+                print(f"Processing {file_name} ({len(structs)} structs, {len(functions)} functions), {rel_path})")
+                structs   = _attach_file_name(structs, rel_path)
+                functions = _attach_file_name(functions, rel_path)
+                code_ref[git_repo_url+rel_path] =code_bytes
+                all_classes.extend(structs)
+                all_functions.extend(functions)
+            else:
+                print(f"Skipping {path}, unsupported file type.")
+                continue
+          
     return all_classes, all_functions
     
 def get_function_context(target_name,all_functions,github_url):
@@ -248,7 +333,7 @@ def get_code_bytes(github_repo, file_name, start_bytes, end_bytes):
     return code_bytes
 
 # find all calls to a specific function in the
-def find_function_calls_within_project(target_name,github_repo):
+def find_function_calls_within_project(function_name,github_repo):
     """
     Find all calls to `target_name` in the project.
     """
@@ -258,15 +343,15 @@ def find_function_calls_within_project(target_name,github_repo):
     for name in all_files:
         if name.startswith(github_repo):
             code_bytes = code_ref[name]
-            calls = find_call_sites(code_bytes, target_name)
+            calls = find_call_sites(code_bytes, function_name)
             rel_path = name
             if calls:
-                context = f"\nFound {len(calls)} call(s) to `{target_name}` in {rel_path}:"
+                context = f"\nFound {len(calls)} call(s) to `{function_name}` in {rel_path}:"
                 for c in calls:
                     context += f"\n  ─ in `{c['caller']}` (L{c['start_line']}–L{c['end_line']}): {c['snippet']}"
                     contexts += context
     if contexts == " ":
-        contexts = f"\nNo calls to `{target_name}` found in the project."
+        contexts = f"\nNo calls to `{function_name}` found in the project."
     return contexts
 
 def get_function_context_for_project(function_name:str, github_repo:str,)-> str:
@@ -304,8 +389,9 @@ if __name__ == "__main__":
     # 0.  Set-up
     # ---------------------------------------------------------------------------
 
-    # GitHub repo to clone
+    #  Test with a GitHub repo URL - Pyhon repo
 
+    print("-----------------Python Repo---------------------------------------")
     repo_url = 'https://github.com/huggingface/accelerate'
     # find a specific function
     target_name = "get_max_layer_size"
@@ -314,7 +400,20 @@ if __name__ == "__main__":
     target_name = "get_max_layer_size"
     contex =get_function_context_for_project(target_name,repo_url)
     print(contex)
-    # code = get_code_bytes(repo_url, "feedparser/namespaces/dc.py", 0, 120)
-    # print(code)
+    print("------------------End Test Python Repo--------------------------------------")
+
+    
+    print("-----------------Go Repo---------------------------------------")
+    repo_url = 'https://github.com/ngrok/ngrok-operator'
+    # find a specific function
+    target_name = "createKubernetesOperator"
+    contex =get_function_context_for_project(target_name,repo_url)
+    print(contex)
+    target_name = "createKubernetesOperator"
+    contex =get_function_context_for_project(target_name,repo_url)
+    print(contex)
+    
+    #  Test with a GitHub repo URL - Pyhon repo
+ 
 
   

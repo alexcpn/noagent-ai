@@ -1,5 +1,5 @@
 
-## An MCP Server that provides the context for effective code-review
+## An MCP Server that provides the context for effective code-review of Pyhton and Go GitHub Repos
 
 
 The MCP server exposes a method that gives the context of a Python function  and details about it including callee. 
@@ -16,7 +16,7 @@ Uses uv as the python package manager
 ## For testing the Business logic
 
 ```
- uv run code_review_mcp_server/tools/code_indexer.py 
+ noframework.ai/code_reviewer$ uv run code_review_mcp_server/tools/code_indexer.py 
  ```
 
 ## Running the Server on HTTP
@@ -52,7 +52,7 @@ uv sync && source .venv/bin/act
  ### Invocaiton
 
  ```
- uv run code_review_agent.py
+  noframework.ai/code_reviewer$ uv run code_review_agent.py
  ```
 
  ### Output for one of the diff files using `gpt-4.1-nano` LLM and this MCP Server
