@@ -1,18 +1,18 @@
 """
 Author: Alex Punnen
 Code to create for a Code Reivew tool helper for  MCP server
+License: Proprietary
 """
 
 import os, textwrap
 from tree_sitter_languages import  get_language
 from tree_sitter import Parser
 import tempfile
-import os
 from git import Repo
 from enum import Enum
 
 
-parser        = Parser()
+parser   = Parser()
 
 
 all_refs = {}  # store all classes and functions in a dict
@@ -28,7 +28,7 @@ def _collect_files(root_dir, extensions=None):
 
 
 # ---------------------------------------------------------------------------
-# Python queries from https://github.com/sankalp1999/code_qa/blob/fe6ce9d852aa1c371c299db22978012df4b354a0/treesitter.py#L16
+# Language queries from https://github.com/sankalp1999/code_qa/blob/fe6ce9d852aa1c371c299db22978012df4b354a0/treesitter.py#L16
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,10 @@ def find_call_sites(code_bytes: bytes, target_name: str):
     parser  = Parser(); parser.set_language(lang)
     query   = _build_call_query(target_name)
     tree    = parser.parse(code_bytes)
-    caps    = query.captures(tree.root_node)
+    if query:
+        caps    = query.captures(tree.root_node)
+    else:
+        return []
 
     sites = []
     for node, cap in caps:
@@ -383,10 +386,11 @@ def get_function_context_for_project(function_name:str, github_repo:str,)-> str:
         return f"Error: {e}"
     
 
+
 if __name__ == "__main__":
 
     # ---------------------------------------------------------------------------
-    # 0.  Set-up
+    #  For testing purposes, we can use a local directory or a GitHub repo URL.
     # ---------------------------------------------------------------------------
 
     #  Test with a GitHub repo URL - Pyhon repo

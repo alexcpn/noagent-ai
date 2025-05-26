@@ -1,8 +1,10 @@
 """
-  This is much simple and based on FastMCP
-  
-  from https://github.com/modelcontextprotocol/python-sdk/?tab=readme-ov-file#quickstart
-  and from   https://gofastmcp.com/deployment/running-server
+  FastMCP Server for Code Indexing Tools
+    This script sets up a FastMCP server to expose tools for code indexing,
+    specifically for retrieving function context and references in a GitHub repository.
+ 
+    Author: Alex Punnen
+    License: MIT License
   
 """
 from fastmcp import FastMCP
@@ -21,6 +23,7 @@ def get_function_context_for_project_mcp(function_name:str, github_repo:str,)-> 
     @param github_repo: The URL of the GitHub repo.
     @param project_root: The root directory of the project.
     """
+    print(f"Finding context for function: {function_name} in repo: {github_repo}")
     return get_function_context_for_project(function_name, github_repo)
 
 @mcp.tool()
@@ -31,15 +34,21 @@ def get_function_references_mcp(function_name:str, github_repo:str,)-> str:
     @param function_name: The name of the function whose references to find.
     @param github_repo: The URL of the GitHub repo.
     """
+    print(f"Finding references for function: {function_name} in repo: {github_repo}")
     callees = find_function_calls_within_project(function_name,github_repo)
     return callees
 
 if __name__ == "__main__":
+
+    import os
+    ip = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "7860"))
+    print(f"Starting MCP server on {ip}:{port}")
     try:
         mcp.run(
             transport="streamable-http",
-            host="127.0.0.1",
-            port=4200,
+            host=ip,
+            port=port,
             path="/mcp",
             log_level="debug",
         )
