@@ -127,7 +127,7 @@ async def main():
             # "If you have finished with the review you can start your response with 'DONE:' and give the final review comments "
             tool_call_example ='{{"method\": \"<method name>\", \"params\": {{\"<param 1 name>\": {<param 1 value>}, \"<param 2 name>\": {<param 2 value>} etc }}}}'
             main_context =f"""
-            You are an expert Python code reviewer.  You are given the following '{diff}' to review from the repo '{repo_url}' 
+            You are an expert Python and Go code reviewer.  You are given the following '{diff}' to review from the repo '{repo_url}' 
             You should generate tool calls to get more context about the code that you are reviewing.
             Whenever you need to look something up— for example, inspect function definitions or call sites—you  you can generate tool calls following the rules below:
             1. **Format**: Every tool call must start with: 'TOOL_CALL:<JSON>'  where `<JSON>` is a valid JSON object matching one of the tool schemas {tools}
