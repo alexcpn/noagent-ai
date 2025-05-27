@@ -1,43 +1,19 @@
+---
+title: Code Review Agent based on MCP 
+emoji: 🛰️
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+app_file: Dockerfile
+pinned: false
 
-## An MCP Server that provides the context for effective code-review of Pyhton and Go GitHub Repos
+# A Code Review Agent in Pure Python - No Frameworks
 
+It uses the new Model Context Protocol exposed by [code_review_mcp_server](code_review_mcp_server) to get more context regarding functions, callees using MCP
 
-The MCP server exposes a method that gives the context of a Python function  and details about it including callee. 
-This is in [tools\code_indexer.py](code_review_mcp_server/tools/code_indexer.py)
+This is added as an additonal context, along with the Merge request or Pull reuqest
 
-This tool is available to the LLM to get context for reviewing code snippet given to it in the repo
-
-The Server use the [TreeSitter project](https://tree-sitter.github.io/tree-sitter/) to do AST parsing of the source and extract, classes, methods, reference and doc stings. Currenly limited to Python files,
-but can easily extend to other languages that TreeSitter supports
-
-Uses uv as the python package manager
-
-
-## For testing the Business logic
-
-```
- noframework.ai/code_reviewer$ uv run code_review_mcp_server/tools/code_indexer.py 
- ```
-
-## Running the Server on HTTP
-
-```
-cd noframework.ai/code_reviewer
-uv sync && source .venv/bin/activate
-noframework.ai/code_reviewer$ uv run code_review_mcp_server/fastmcp_server.py
-```
-
-## Running the Client to test the MCP Server
-
-```
-cd noframework.ai/code_reviewer
-uv sync && source .venv/bin/act
- noframework.ai/code_reviewer$ uv run code_review_mcp_server/fastmcp_client.py
-```
-
-
-
- ## Using the Code Review MCP Server for a Code Review Automatiom
+ ###  Using the Code Review MCP Server for a Code Review Automatiom
 
  The code for the workflow is in [code_review_agent.py](code_review_agent.py)
 
@@ -49,11 +25,25 @@ uv sync && source .venv/bin/act
 
  It keeps track of LLM invocation and generation costs and keeps the workflow within specified budget
 
- ### Invocaiton
+ ### Direct Invocaiton
 
  ```
-  noframework.ai/code_reviewer$ uv run code_review_agent.py
+ r$ uv run code_review_agent.py
  ```
+
+ ### As part of Github Repo Webhook
+
+Build the Docker and Run it in a server or via ngrok; and the the IP/URL to the  GitHub/Gitlab Webook
+
+```
+docker build -t codereview-agent .
+
+docker run -it --rm -p 7860:7860 codereview-agent
+```
+
+Example of the Webhook setting 
+
+![web hook](https://i.postimg.cc/LXcjtpv5/image.png)
 
  ### Output for one of the diff files using `gpt-4.1-nano` LLM and this MCP Server
 

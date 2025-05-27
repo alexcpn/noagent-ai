@@ -11,8 +11,7 @@ import asyncio
 from fastmcp import Client
 
 async def example():
-    ## async with Client("http://127.0.0.1:7860/mcp") as client: for local run
-    async with Client("https://alexcpn-code-review-mcp-server.hf.space/mcp/") as client: #for local run
+    async with Client("http://127.0.0.1:7860/mcp") as client:
         await client.ping()
         # List available tools
         tools = await client.list_tools()

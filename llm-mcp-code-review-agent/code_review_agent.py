@@ -5,20 +5,20 @@ This is a simple python based Code Review Agent flow using OpenAI LLM APIs amd M
 Design patterns like Command Pattern are used along with for loops to stucture flow and response as we need
 
 """
+import os
+import sys
+import inspect
 import asyncio
 from fastmcp import Client
 from openai import OpenAI
 from dotenv import load_dotenv
-import os
-
 import requests
 import re
 from collections import defaultdict
 import logging as log
 from datetime import datetime
-import os
-import sys
-import inspect
+from fastapi import FastAPI, Request, Header
+from fastapi.responses import JSONResponse
 
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 parentdir = os.path.dirname(currentdir)
@@ -34,11 +34,19 @@ __version__ = "1.0.0"
 __email__ = "alexcpn@gmail.com"
 
 
-        
 #--------------------------------------------------------------------
 # Helper functions
 #--------------------------------------------------------------------
-
+os.makedirs("./logs", exist_ok=True)
+time_hash = str(datetime.now()).strip()
+outfile = "./logs/out_" +  time_hash + "_" + ".log"
+log.basicConfig(
+    level=log.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",  #
+    # format="[%(levelname)s] %(message)s",  # dont need timing
+    handlers=[log.FileHandler(outfile), log.StreamHandler()],
+    force=True,
+)
 # Load the .env file and get the API key
 load_dotenv()
 #https://platform.openai.com/api-keys add this to your .env file
@@ -53,6 +61,8 @@ openai_client = OpenAI(
     api_key=api_key,
     base_url="https://api.openai.com/v1"
 )
+app = FastAPI()
+GITLAB_TOKEN = os.getenv("GITLAB_TOKEN")  # GitLab personal access token
 
 def get_pr_diff_url(repo_url, pr_number):
     """ 
@@ -84,30 +94,17 @@ def get_pr_diff_url(repo_url, pr_number):
     return file_diffs
     
 
+async def main(repo_url,pr_number):
 
-async def main():
-    os.makedirs("./logs", exist_ok=True)
-    time_hash = str(datetime.now()).strip()
-    outfile = "./logs/out_" +  time_hash + "_" + ".log"
-    log.basicConfig(
-        level=log.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",  #
-        # format="[%(levelname)s] %(message)s",  # dont need timing
-        handlers=[log.FileHandler(outfile), log.StreamHandler()],
-        force=True,
-    )
-    
-    repo_url = "https://github.com/huggingface/accelerate"
-    
     # Example: get the diff for a specific PR
-    file_diffs = get_pr_diff_url(repo_url, 2663)
+    file_diffs = get_pr_diff_url(repo_url, pr_number)
     
     #------------------------------------------------
     #  Command to Call the LLM with a budget ( 0.5 Dollars)
     call_llm_command = CallLLM(openai_client, "Call the LLM with the given context", "gpt-4.1-nano", COST_PER_TOKEN_INPUT,COST_PER_TOKEN_OUTPUT, 0.5)
     
-    # this this the MCP client invoking the tool
-    async with Client("http://127.0.0.1:4200/mcp/") as fastmcp_client:
+    # this this the MCP client invoking the tool - the code review MCP server
+    async with Client("https://alexcpn-code-review-mcp-server.hf.space/mcp/") as fastmcp_client:
         tool_call_command = ToolCall(fastmcp_client, "Call the tool with the given method and params")
         tool_list_command = ToolList(fastmcp_client, "List the available tools")
         
@@ -170,5 +167,50 @@ async def main():
                     else:
                         log.info("Context too long, not adding LLM response to context.")
     call_llm_command.get_total_cost()
-if __name__ == "__main__":
-    asyncio.run(main())
+    return context
+    
+
+@app.route("/webhook", methods=["POST"])
+async def webhook(request: Request, x_github_event: str = Header(...)):
+    try:
+        x_github_event = request.headers.get("X-GitHub-Event")
+        log.info(f"Received webhook event: {x_github_event}")
+        data = await request.json()
+    except Exception as e:
+        log.error(f"Error parsing JSON: {e}")
+        return JSONResponse(content={"status": "error", "message": "Invalid JSON"}, status_code=400)
+    log.info(f"Webhook data: {data}")
+        # Handle PR review comment events
+    if x_github_event == "pull_request_review_comment":
+        comment_body = data.get("comment", {}).get("body", "")
+        if "@code_review" in comment_body:
+            repo_full_name = data["repository"]["full_name"]               # e.g. alexcpn/accelerate-test
+            pr_url = data["comment"]["pull_request_url"]                   # e.g. .../pulls/1
+            pr_number = int(pr_url.split("/")[-1])
+            repo_url = f"https://github.com/{repo_full_name}"
+
+            log.info(f"Triggered code review on {repo_url} PR #{pr_number}")
+
+            review_comment = await main(repo_url, pr_number) or "No issues found."
+
+            # Post back to the same thread
+            comment_url = data["comment"]["url"]
+            headers = {
+                "Authorization": f"token {GITLAB_TOKEN}",
+                "Accept": "application/vnd.github+json"
+            }
+            post_response = requests.post(
+                comment_url,
+                headers=headers,
+                json={"body": f"AI 🧠 Code Review:\n```\n{review_comment}\n```"}
+            )
+            log.info(f"Posted review result: {post_response.status_code}")
+            return JSONResponse(content={"status": "review triggered"})
+        
+    return JSONResponse(content={"status": "ok"})
+# 
+# if __name__ == "__main__":
+#     repo_url = "https://github.com/huggingface/accelerate"
+#     pr_number = 2603
+#     asyncio.run(main())
+
