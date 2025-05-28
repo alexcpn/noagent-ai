@@ -1,5 +1,5 @@
 ---
-title: Code Review Agent based on MCP 
+title: Code Review Agent based on MCP
 emoji: 🛰️
 colorFrom: indigo
 colorTo: blue
@@ -13,27 +13,32 @@ It uses the new Model Context Protocol exposed by [code_review_mcp_server](code_
 
 This is added as an additonal context, along with the Merge request or Pull reuqest
 
- ###  Using the Code Review MCP Server for a Code Review Automatiom
+### Using the Code Review MCP Server for a Code Review Automatiom
 
  The code for the workflow is in [code_review_agent.py](code_review_agent.py)
 
- It takes in a Github Repo URL, for exmaple 'https://github.com/huggingface/accelerate' and the PR number say [3321](https://github.com/huggingface/accelerate/pull/3321) to review
+ It takes in a Github Repo URL, for exmaple '<https://github.com/huggingface/accelerate>' and the PR number say [3321](https://github.com/huggingface/accelerate/pull/3321) to review
 
- It gets the [diff of the files involved](https://patch-diff.githubusercontent.com/raw/huggingface/accelerate/pull/3321.diff) and used the MCP Server to find more details about the functions in the PR and their refrences. 
+ It gets the [diff of the files involved](https://patch-diff.githubusercontent.com/raw/huggingface/accelerate/pull/3321.diff) and used the MCP Server to find more details about the functions in the PR and their refrences.
 
  It does error handling and max retries as specified.
 
  It keeps track of LLM invocation and generation costs and keeps the workflow within specified budget
 
- ### Direct Invocaiton
+### Direct Invocaiton
 
  ```
- r$ uv run code_review_agent.py
+cd llm-mcp-code-review-agent
+uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860 
  ```
 
- ### As part of Github Repo Webhook
+You can expose the above vi Ngrok `ngrok http http://localhost:8860` or local.run `ssh -R 80:localhost:8860 localhost.run`
+
+### As part of Github Repo Webhook
 
 Build the Docker and Run it in a server or via ngrok; and the the IP/URL to the  GitHub/Gitlab Webook
+
+(Note 7860 is the port for HuggingFace Spaces)
 
 ```
 docker build -t codereview-agent .
@@ -41,11 +46,11 @@ docker build -t codereview-agent .
 docker run -it --rm -p 7860:7860 codereview-agent
 ```
 
-Example of the Webhook setting 
+Example of the Webhook setting
 
 ![web hook](https://i.postimg.cc/LXcjtpv5/image.png)
 
- ### Output for one of the diff files using `gpt-4.1-nano` LLM and this MCP Server
+### Output for one of the diff files using `gpt-4.1-nano` LLM and this MCP Server
 
  ```
  2025-05-20 17:03:47,352 [INFO] --------------------------------------------------------------------------------
@@ -98,5 +103,3 @@ No major structural issues detected. The code is clear with proper conditional h
 Would you like me to check the other functions used here or provide more detailed suggestions?
 2025-05-20 17:03:58,311 [INFO] LLM finished the code review
 ```
-
- 
