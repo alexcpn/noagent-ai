@@ -56,15 +56,24 @@ MAX_RETRIES = 5
 COST_PER_TOKEN_INPUT =  0.10/10e6 # USD  # https://platform.openai.com/docs/pricing for gpt-4.1-nano
 COST_PER_TOKEN_OUTPUT = .40/10e6 # USD
 MCP_SERVER_URL = os.getenv(
-    "CODE_REVIEW_MCP_SERVER_URL",
+    "CODE_AST_MCP_SERVER_URL",
     "http://127.0.0.1:7860/mcp",
 )
 
 # Initialize OpenAI client with OpenAI's official base URL
+# openai_client = OpenAI(
+#     api_key=api_key,
+#     base_url="https://api.openai.com/v1"
+# )
+# MODEL_NAME= "gpt-4.1-nano"
+
 openai_client = OpenAI(
-    api_key=api_key,
-    base_url="https://api.openai.com/v1"
+    api_key="sk-local",
+    base_url="http://localhost:11434/v1"
 )
+MODEL_NAME= "phi3.5"
+
+
 app = FastAPI()
 GITLAB_TOKEN = os.getenv("GITLAB_TOKEN")  # GitLab personal access token
 
@@ -107,27 +116,20 @@ async def main(repo_url,pr_number):
     
     #------------------------------------------------
     #  Command to Call the LLM with a budget ( 0.5 Dollars)
-    call_llm_command = CallLLM(openai_client, "Call the LLM with the given context", "gpt-4.1-nano", COST_PER_TOKEN_INPUT,COST_PER_TOKEN_OUTPUT, 0.5)
+    call_llm_command = CallLLM(openai_client, "Call the LLM with the given context", MODEL_NAME, COST_PER_TOKEN_INPUT,COST_PER_TOKEN_OUTPUT, 0.5)
     
     # this this the MCP client invoking the tool - the code review MCP server
-    async with Client(MCP_SERVER_URL) as fastmcp_client:
-        tool_call_command = ToolCall(fastmcp_client, "Call the tool with the given method and params")
-        tool_list_command = ToolList(fastmcp_client, "List the available tools")
+    async with Client(MCP_SERVER_URL) as ast_parseer_tool_client:
+        ast_tool_call_command = ToolCall(ast_parseer_tool_client, "Call the tool with the given method and params")
+        ast_tool_list_command = ToolList(ast_parseer_tool_client, "List the available tools")
         
-        tools = await tool_list_command.execute(None)
+        tools = await ast_tool_list_command.execute(None)
         log.info(f"Available tools: {tools}")
         # Example: log.info diffs for all files (trimmed)
         for file_path, diff in file_diffs.items():
             log.info("-"*80)
-            log.info(f"Review diff for {file_path}") 
+            log.info(f"Review code for {file_path}") 
             
-            # main_context = f"You are an expert Python code reviewer, You are given the following {diff} to review from the repo {repo_url} " + \
-            # f"You can use the following tools {tools} if needed to get more context about the code that you are reviewing," + \
-            # "if you need to check the functions used in the code, or where they are called  you can call the tools" + \
-            # f"For framing a call to the tool you can use the format of the tool '{tools}'. Frame the JSON RPC call to the tool" +  \
-            # "If you need to call the tool start response with TOOL_CALL:<json format for the tool call>" + \
-            # "here is the JSON RPC call format {{\"method\": \"<method name>\", \"params\": {{\"<param 1 name>\": {<param 1 value>}, \"<param 2 name>\": {<param 2 value>} etc }}}}" +\
-            # "If you have finished with the review you can start your response with 'DONE:' and give the final review comments "
             tool_call_example ='{{"method\": \"<method name>\", \"params\": {{\"<param 1 name>\": {<param 1 value>}, \"<param 2 name>\": {<param 2 value>} etc }}}}'
             main_context =f"""
             You are an expert code reviewer.  You are given the following '{diff}' to review from the repo '{repo_url}' 
@@ -142,7 +144,6 @@ async def main(repo_url,pr_number):
 
             """
             
-            
             context = main_context  
             while True:
                 response = call_llm_command.execute(context)
@@ -153,7 +154,7 @@ async def main(repo_url,pr_number):
                     # Extract the JSON part
                     response = response[len("TOOL_CALL:"):].strip()
                     log.info(f"Extracted JSON: {response}")
-                    tool_result,isSuceess =await tool_call_command.execute(response)
+                    tool_result,isSuceess =await ast_tool_call_command.execute(response)
                     log.info(f"Tool result: {tool_result}")
                     # check before adding to context
                     temp =context + f"Tool call result: {tool_result}"

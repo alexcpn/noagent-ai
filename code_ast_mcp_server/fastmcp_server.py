@@ -21,7 +21,6 @@ def get_function_context_for_project_mcp(function_name:str, github_repo:str,)-> 
     
     @param function_name: The name of the function to find.
     @param github_repo: The URL of the GitHub repo.
-    @param project_root: The root directory of the project.
     """
     print(f"Finding context for function: {function_name} in repo: {github_repo}")
     return get_function_context_for_project(function_name, github_repo)

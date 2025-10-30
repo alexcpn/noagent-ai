@@ -11,7 +11,7 @@ pinned: false
 
 # A Code Review Agent in Pure Python - No Frameworks
 
-It uses the new Model Context Protocol exposed by [code_review_mcp_server](code_review_mcp_server) to get more context regarding functions, callees using MCP
+It uses the new Model Context Protocol exposed by [code_ast_mcp_server](code_ast_mcp_server) to get more context regarding functions, callees using MCP
 
 This is added as an additonal context, along with the Merge request or Pull reuqest
 
@@ -31,7 +31,7 @@ This is added as an additonal context, along with the Merge request or Pull reuq
 
 ```
 cd llm-mcp-code-review-agent
-CODE_REVIEW_MCP_SERVER_URL=http://127.0.0.1:7860/mcp uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860
+CODE_AST_MCP_SERVER_URL=http://127.0.0.1:7860/mcp uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860
 ```
 
 ## Client
@@ -39,7 +39,7 @@ CODE_REVIEW_MCP_SERVER_URL=http://127.0.0.1:7860/mcp uv run uvicorn code_review_
 You can test with a python client like below
 
 ```
-python client.py --repo-url https://github.com/huggingface/accelerate --pr-number 3321
+python3 client.py --repo-url https://github.com/huggingface/accelerate --pr-number 3321
 ```
 
 You can expose the above vi Ngrok `ngrok http http://localhost:8860` or local.run `ssh -R 80:localhost:8860 localhost.run
