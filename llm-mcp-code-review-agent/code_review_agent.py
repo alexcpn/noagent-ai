@@ -55,6 +55,10 @@ MAX_CONTEXT_LENGTH = 16385
 MAX_RETRIES = 5
 COST_PER_TOKEN_INPUT =  0.10/10e6 # USD  # https://platform.openai.com/docs/pricing for gpt-4.1-nano
 COST_PER_TOKEN_OUTPUT = .40/10e6 # USD
+MCP_SERVER_URL = os.getenv(
+    "CODE_REVIEW_MCP_SERVER_URL",
+    "http://127.0.0.1:7860/mcp",
+)
 
 # Initialize OpenAI client with OpenAI's official base URL
 openai_client = OpenAI(
@@ -97,14 +101,16 @@ def get_pr_diff_url(repo_url, pr_number):
 async def main(repo_url,pr_number):
 
     # Example: get the diff for a specific PR
+    print(f"Fetching diffs for PR #{pr_number} from {repo_url}...")
     file_diffs = get_pr_diff_url(repo_url, pr_number)
+    print(f"Fetched diffs for {len(file_diffs)} files in PR #{pr_number} from {repo_url}")
     
     #------------------------------------------------
     #  Command to Call the LLM with a budget ( 0.5 Dollars)
     call_llm_command = CallLLM(openai_client, "Call the LLM with the given context", "gpt-4.1-nano", COST_PER_TOKEN_INPUT,COST_PER_TOKEN_OUTPUT, 0.5)
     
     # this this the MCP client invoking the tool - the code review MCP server
-    async with Client("https://alexcpn-code-review-mcp-server.hf.space/mcp/") as fastmcp_client:
+    async with Client(MCP_SERVER_URL) as fastmcp_client:
         tool_call_command = ToolCall(fastmcp_client, "Call the tool with the given method and params")
         tool_list_command = ToolList(fastmcp_client, "List the available tools")
         
@@ -124,7 +130,7 @@ async def main(repo_url,pr_number):
             # "If you have finished with the review you can start your response with 'DONE:' and give the final review comments "
             tool_call_example ='{{"method\": \"<method name>\", \"params\": {{\"<param 1 name>\": {<param 1 value>}, \"<param 2 name>\": {<param 2 value>} etc }}}}'
             main_context =f"""
-            You are an expert Python and Go code reviewer.  You are given the following '{diff}' to review from the repo '{repo_url}' 
+            You are an expert code reviewer.  You are given the following '{diff}' to review from the repo '{repo_url}' 
             You should generate tool calls to get more context about the code that you are reviewing.
             Whenever you need to look something up— for example, inspect function definitions or call sites—you  you can generate tool calls following the rules below:
             1. **Format**: Every tool call must start with: 'TOOL_CALL:<JSON>'  where `<JSON>` is a valid JSON object matching one of the tool schemas {tools}
@@ -155,7 +161,7 @@ async def main(repo_url,pr_number):
                         context = temp
                     else:
                         log.warning("Context too long, not adding tool result to context.")
-                elif response.startswith("DONE:"):
+                elif "DONE" in response:
                     log.info("LLM finished the code review") 
                     log.info("-"*80)
                     break # break out of the loop
@@ -169,6 +175,17 @@ async def main(repo_url,pr_number):
     call_llm_command.get_total_cost()
     return context
     
+
+@app.get("/review")
+async def review(repo_url: str, pr_number: int):
+    log.info(f"Received review request for {repo_url} PR #{pr_number}")
+    try:
+        review_comment = await main(repo_url, pr_number)
+    except Exception as exc:
+        log.exception("Error executing review")
+        return JSONResponse(content={"status": "error", "message": str(exc)}, status_code=500)
+    return JSONResponse(content={"status": "ok", "review_comment": review_comment or "No review comment produced."})
+
 
 @app.route("/webhook", methods=["POST"])
 async def webhook(request: Request, x_github_event: str = Header(...)):
@@ -202,7 +219,7 @@ async def webhook(request: Request, x_github_event: str = Header(...)):
             post_response = requests.post(
                 comment_url,
                 headers=headers,
-                json={"body": f"AI 🧠 Code Review:\n```\n{review_comment}\n```"}
+                json={"body": f"AI Code Review:\n```\n{review_comment}\n```"}
             )
             log.info(f"Posted review result: {post_response.status_code}")
             return JSONResponse(content={"status": "review triggered"})
@@ -213,4 +230,3 @@ async def webhook(request: Request, x_github_event: str = Header(...)):
 #     repo_url = "https://github.com/huggingface/accelerate"
 #     pr_number = 2603
 #     asyncio.run(main())
-

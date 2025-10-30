@@ -1,4 +1,5 @@
 ---
+
 title: Code Review Agent based on MCP
 emoji: 🛰️
 colorFrom: indigo
@@ -6,6 +7,7 @@ colorTo: blue
 sdk: docker
 app_file: Dockerfile
 pinned: false
+---
 
 # A Code Review Agent in Pure Python - No Frameworks
 
@@ -27,14 +29,22 @@ This is added as an additonal context, along with the Merge request or Pull reuq
 
 ### Direct Invocaiton
 
- ```
+```
 cd llm-mcp-code-review-agent
-uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860 
- ```
+CODE_REVIEW_MCP_SERVER_URL=http://127.0.0.1:7860/mcp uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860
+```
 
-You can expose the above vi Ngrok `ngrok http http://localhost:8860` or local.run `ssh -R 80:localhost:8860 localhost.run`
+## Client
 
-### As part of Github Repo Webhook
+You can test with a python client like below
+
+```
+python client.py --repo-url https://github.com/huggingface/accelerate --pr-number 3321
+```
+
+You can expose the above vi Ngrok `ngrok http http://localhost:8860` or local.run `ssh -R 80:localhost:8860 localhost.run
+
+### Integration to  Github Repo Webhook
 
 Build the Docker and Run it in a server or via ngrok; and the the IP/URL to the  GitHub/Gitlab Webook
 

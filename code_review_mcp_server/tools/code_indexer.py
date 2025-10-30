@@ -17,6 +17,13 @@ parser   = Parser()
 
 all_refs = {}  # store all classes and functions in a dict
 code_ref ={} # hold the code bytes
+code_languages = {}  # track language per file for downstream queries
+
+LANGUAGE_NAME_MAP = {
+    "python": "python",
+    "go": "go",
+    "cpp": "cpp",
+}
 
 def _collect_files(root_dir, extensions=None):
     all_files = []
@@ -77,22 +84,61 @@ class LanguageEnum(Enum):
         (comment) @comment
     """
 }
+
+    CPP = {
+        "class_query": r"""
+            (class_specifier
+                name: (type_identifier) @class.name)
+        """,
+        "struct_query": r"""
+            (struct_specifier
+                name: (type_identifier) @struct.name)
+        """,
+        "func_query": r"""
+            (function_definition
+                declarator: (function_declarator
+                    declarator: [
+                        (identifier) @function.name
+                        (field_identifier) @function.name
+                    ]
+                )
+            )
+        """,
+        "doc_query": r"""
+            (comment) @comment
+        """,
+    }
 # ---------------------------------------------------------------------------
 #  run the query and grab the captures
 # ---------------------------------------------------------------------------
-def _run_query(code_bytes,q_src, tag,language):
+def _normalize_block(node):
+    """
+    Walk up the tree until we hit a block node representing a function or class.
+    """
+    target_types = {
+        "function_definition",
+        "function_declaration",
+        "method_declaration",
+        "class_definition",
+        "class_specifier",
+        "struct_specifier",
+        "type_spec",
+    }
+    cur = node
+    while cur and cur.type not in target_types:
+        cur = cur.parent
+    return cur or node
+
+
+def _run_query(code_bytes, q_src, tag, language):
     """
     Return a list of dicts: {node, name, start_line, end_line}
     for every capture whose capture-name == tag.
     """
-    if language == "python":
-        lang = get_language("python")
-        parser.set_language(lang)
-    elif language == "go":
-        lang = get_language("go")
-        parser.set_language(lang)
-    else:       
+    if language not in LANGUAGE_NAME_MAP:
         raise ValueError(f"Unsupported language: {language}")
+    lang = get_language(LANGUAGE_NAME_MAP[language])
+    parser.set_language(lang)
     query     = lang.query(q_src)
     root      = parser.parse(code_bytes).root_node
     captures  = query.captures(root)                 # [(node, capture_name), …]
@@ -102,7 +148,10 @@ def _run_query(code_bytes,q_src, tag,language):
         if cap_name != tag:
             continue
         name  = code_bytes[node.start_byte: node.end_byte].decode()
-        block = node.parent                          # whole class/func node
+        if tag in {"docstring", "comment"}:
+            block = node
+        else:
+            block = _normalize_block(node)
         #  Get the enclosing class (if any)
         class_name = _get_enclosing_class_name(block, code_bytes)
         
@@ -142,38 +191,35 @@ def _attach_file_name(items, file_path):
 # ---------------------------------------------------------------------------
 # Build a query that finds all calls to `target_name`
 # ---------------------------------------------------------------------------
-def _build_call_query(target_name: str):
-    # 1) Bare calls:   (call function: (identifier) @call.name)
-    # 2) Attr calls:   (call function: (attribute object: _ attribute: (identifier) @call.name))
-    # We capture the entire call node as @call.node so we can get its position.
-    # find if this is a python or go file
-    if target_name.startswith("python."):
-        
-        return get_language("python").query(f"""
+def _build_call_query(target_name: str, language: str):
+    if language == "python":
+        lang = get_language("python")
+        return lang.query(f"""
         (
-        (call
-            function: (identifier) @call.name
-            arguments: (_)*
-        ) @call.node
-        (#eq? @call.name "{target_name}")
+            (call
+                function: (identifier) @call.name
+                arguments: (argument_list)?
+            ) @call.node
+            (#eq? @call.name "{target_name}")
         )
         (
-        (call
-            function: (attribute
-                        object: (_)
-                        attribute: (identifier) @call.name
-                    )
-            arguments: (_)*
-        ) @call.node
-        (#eq? @call.name "{target_name}")
+            (call
+                function: (attribute
+                    object: (_)
+                    attribute: (identifier) @call.name
+                )
+                arguments: (argument_list)?
+            ) @call.node
+            (#eq? @call.name "{target_name}")
         )
         """)
-    elif target_name.startswith("go."):
-        return get_language("go").query(f"""
+    if language == "go":
+        lang = get_language("go")
+        return lang.query(f"""
         (
             (call_expression
                 function: (identifier) @call.name
-                arguments: (_)*
+                arguments: (argument_list)?
             ) @call.node
             (#eq? @call.name "{target_name}")
         )
@@ -181,8 +227,47 @@ def _build_call_query(target_name: str):
             (call_expression
                 function: (selector_expression
                     operand: (_)
-        
+                    field: (field_identifier) @call.name
+                )
+                arguments: (argument_list)?
+            ) @call.node
+            (#eq? @call.name "{target_name}")
+        )
         """)
+    if language == "cpp":
+        lang = get_language("cpp")
+        return lang.query(f"""
+        (
+            (call_expression
+                function: (identifier) @call.name
+                arguments: (argument_list)?
+            ) @call.node
+            (#eq? @call.name "{target_name}")
+        )
+        (
+            (call_expression
+                function: (field_expression
+                    field: (field_identifier) @call.name
+                )
+                arguments: (argument_list)?
+            ) @call.node
+            (#eq? @call.name "{target_name}")
+        )
+        """)
+    return None
+
+def _extract_identifier(node, code_bytes):
+    """
+    Depth-first search for the first identifier-like child node.
+    """
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type in {"identifier", "field_identifier", "type_identifier"}:
+            return code_bytes[cur.start_byte:cur.end_byte].decode()
+        stack.extend(reversed(cur.children or []))
+    return None
+
 
 def _get_enclosing_function(node, code_bytes):
     """
@@ -191,11 +276,16 @@ def _get_enclosing_function(node, code_bytes):
     """
     cur = node
     while cur:
-        if cur.type == "function_definition":
+        if cur.type in {"function_definition", "function_declaration", "method_declaration"}:
             # child_by_field_name works if the grammar labels the name field
             name_node = cur.child_by_field_name("name")
             if name_node:
                 return code_bytes[name_node.start_byte:name_node.end_byte].decode()
+            declarator = cur.child_by_field_name("declarator")
+            if declarator:
+                extracted = _extract_identifier(declarator, code_bytes)
+                if extracted:
+                    return extracted
         cur = cur.parent
     return None
 def _get_enclosing_class_name(node, code_bytes):
@@ -204,22 +294,24 @@ def _get_enclosing_class_name(node, code_bytes):
     """
     cur = node
     while cur:
-        if cur.type == "class_definition":
+        if cur.type in {"class_definition", "class_specifier", "struct_specifier"}:
             name_node = cur.child_by_field_name("name")
             if name_node:
                 return code_bytes[name_node.start_byte:name_node.end_byte].decode()
         cur = cur.parent
     return None
 
-def find_call_sites(code_bytes: bytes, target_name: str):
-    lang    = get_language("python")
-    parser  = Parser(); parser.set_language(lang)
-    query   = _build_call_query(target_name)
-    tree    = parser.parse(code_bytes)
-    if query:
-        caps    = query.captures(tree.root_node)
-    else:
+def find_call_sites(code_bytes: bytes, target_name: str, language: str):
+    if language not in LANGUAGE_NAME_MAP:
         return []
+    lang    = get_language(LANGUAGE_NAME_MAP[language])
+    parser_local  = Parser()
+    parser_local.set_language(lang)
+    query   = _build_call_query(target_name, language)
+    tree    = parser_local.parse(code_bytes)
+    if not query:
+        return []
+    caps    = query.captures(tree.root_node)
 
     sites = []
     for node, cap in caps:
@@ -246,7 +338,7 @@ def find_call_sites(code_bytes: bytes, target_name: str):
 def index_all_files(project_root,git_repo_url):
     all_classes = []
     all_functions = []
-    all_files = _collect_files(project_root, [".py",".go"])
+    all_files = _collect_files(project_root, [".py",".go",".cpp",".cc",".cxx",".hpp",".hh",".h",".hxx",".ipp"])
     for path in all_files:
         with open(path, "r", encoding="utf8") as f:
             code = f.read()
@@ -268,6 +360,7 @@ def index_all_files(project_root,git_repo_url):
                 classes   = _attach_file_name(classes, rel_path)
                 functions = _attach_file_name(functions, rel_path)
                 code_ref[git_repo_url+rel_path] =code_bytes
+                code_languages[git_repo_url+rel_path] = "python"
                 all_classes.extend(classes)
                 all_functions.extend(functions)
             elif path.endswith(".go"):
@@ -285,6 +378,27 @@ def index_all_files(project_root,git_repo_url):
                 structs   = _attach_file_name(structs, rel_path)
                 functions = _attach_file_name(functions, rel_path)
                 code_ref[git_repo_url+rel_path] =code_bytes
+                code_languages[git_repo_url+rel_path] = "go"
+                all_classes.extend(structs)
+                all_functions.extend(functions)
+            elif path.endswith((".cpp",".cc",".cxx",".hpp",".hh",".h",".hxx",".ipp")):
+                language = LanguageEnum.CPP.value
+                classes   = _run_query(code_bytes, language["class_query"], "class.name", "cpp")
+                structs   = _run_query(code_bytes, language["struct_query"], "struct.name", "cpp")
+                functions = _run_query(code_bytes, language["func_query"], "function.name", "cpp")
+                docs      = _run_query(code_bytes, language["doc_query"], "comment", "cpp")
+                classes   = _attach_docstrings(code_bytes, classes, docs)
+                structs   = _attach_docstrings(code_bytes, structs, docs)
+                functions = _attach_docstrings(code_bytes, functions, docs)
+                file_name = os.path.basename(path)
+                rel_path  = os.path.relpath(path, project_root)
+                print(f"Processing {file_name} ({len(classes)+len(structs)} class/struct, {len(functions)} functions), {rel_path})")
+                classes   = _attach_file_name(classes, rel_path)
+                structs   = _attach_file_name(structs, rel_path)
+                functions = _attach_file_name(functions, rel_path)
+                code_ref[git_repo_url+rel_path] = code_bytes
+                code_languages[git_repo_url+rel_path] = "cpp"
+                all_classes.extend(classes)
                 all_classes.extend(structs)
                 all_functions.extend(functions)
             else:
@@ -346,7 +460,8 @@ def find_function_calls_within_project(function_name,github_repo):
     for name in all_files:
         if name.startswith(github_repo):
             code_bytes = code_ref[name]
-            calls = find_call_sites(code_bytes, function_name)
+            language = code_languages.get(name)
+            calls = find_call_sites(code_bytes, function_name, language) if language else []
             rel_path = name
             if calls:
                 context = f"\nFound {len(calls)} call(s) to `{function_name}` in {rel_path}:"
@@ -375,8 +490,14 @@ def get_function_context_for_project(function_name:str, github_repo:str,)-> str:
             temp_dir = tempfile.TemporaryDirectory()
             project_root = temp_dir.name
             # Clone the repo
+            print(f"Cloning repo {github_repo} into {project_root}...")
             Repo.clone_from(github_repo, project_root,depth=1)
+            print(f"Cloned repo {github_repo} into {project_root}.")
+            # index all files
+            print(f"Indexing files in {project_root}...")
             all_classes, all_functions =index_all_files(project_root,github_repo)
+            print(f"Indexed {len(all_classes)} classes and {len(all_functions)} functions.")
+            
             # store this in a dict
             all_refs[github_repo] = {"classes": all_classes, "functions": all_functions}
         # store this in a dict
