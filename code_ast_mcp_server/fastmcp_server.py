@@ -42,7 +42,7 @@ if __name__ == "__main__":
     import os
     ip = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "7860"))
-    print(f"Starting MCP server on {ip}:{port}")
+    print(f"Starting Code AST MCP server on {ip}:{port}")
     try:
         mcp.run(
             transport="streamable-http",

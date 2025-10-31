@@ -8,13 +8,17 @@ Just plain MCP and API calls combined with good old-fashioned programming.
 
 A LLM Based Agentic Code review example is given here.
 
- ## [Code Review MCP Server](code_ast_mcp_server).
+## [Code Review MCP Server](code_ast_mcp_server).
 
 See the [Readme](code_ast_mcp_server/README.md) for how a Code Review MCP Server is Implemented
 
 This server contains the business logic for AST parsing and querying the code for function definitions and their call locations.
 
 This setup can be used by an AI agent to generate sufficient context to properly review the code.
+
+## [Code Search MCP Server](code_search_mcp_server)
+
+See the [Readme](code_search_mcp_server/README.md) for a lightweight FastMCP server that exposes a generic string search across a source tree.
 
 ## [Code review Agent](llm-mcp-code-review-agent)
 
@@ -29,24 +33,30 @@ Note - You will need an OpenAI API Key/Subscription for running the Client/Agent
 # Running the Full System
 
 
-## 1. Running the Code AST MCO Server on HTTP
+## Running the Code AST MCO Server on HTTP
 
 ```
-cd code_ast_mcp_server/
-uv sync 
-uv run fastmcp_server.py
+cd code_ast_mcp_server && uv run fastmcp_server.py &
+```
+
+## Running the Code Search MCP Server
+
+```
+cd code_search_mcp_server && uv run fastmcp_server.py &
 ```
 
 You can expose the above vi Ngrok `ngrok http http://localhost:7860`
 
+
+
 ## 2. Running the Code Review Agent
 
 ```
-cd llm-mcp-code-review-agent
-CODE_AST_MCP_SERVER_URL=http://127.0.0.1:7860/mcp uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860
+cd llm-mcp-code-review-agent && \
+CODE_AST_MCP_SERVER_URL=http://127.0.0.1:7860/mcp CODE_SEARCH_MCP_SERVER_URL=http://127.0.0.1:7861/mcp uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860
 ```
 
-since we are running the AST MCP Server locally for now
+since we are running the  MCP Servers locally for now
 
 
 ## 3. Running the Test Client

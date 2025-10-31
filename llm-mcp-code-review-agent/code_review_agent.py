@@ -55,10 +55,16 @@ MAX_CONTEXT_LENGTH = 16385
 MAX_RETRIES = 5
 COST_PER_TOKEN_INPUT =  0.10/10e6 # USD  # https://platform.openai.com/docs/pricing for gpt-4.1-nano
 COST_PER_TOKEN_OUTPUT = .40/10e6 # USD
-MCP_SERVER_URL = os.getenv(
+AST_MCP_SERVER_URL = os.getenv(
     "CODE_AST_MCP_SERVER_URL",
     "http://127.0.0.1:7860/mcp",
 )
+
+SEARCH_MCP_SERVER_URL = os.getenv(
+    "CODE_SEARCH_MCP_SERVER_URL",
+    "http://127.0.0.1:7861/mcp",
+)
+
 
 # Initialize OpenAI client with OpenAI's official base URL
 # openai_client = OpenAI(
@@ -119,9 +125,13 @@ async def main(repo_url,pr_number):
     call_llm_command = CallLLM(openai_client, "Call the LLM with the given context", MODEL_NAME, COST_PER_TOKEN_INPUT,COST_PER_TOKEN_OUTPUT, 0.5)
     
     # this this the MCP client invoking the tool - the code review MCP server
-    async with Client(MCP_SERVER_URL) as ast_parseer_tool_client:
-        ast_tool_call_command = ToolCall(ast_parseer_tool_client, "Call the tool with the given method and params")
-        ast_tool_list_command = ToolList(ast_parseer_tool_client, "List the available tools")
+    async with Client(AST_MCP_SERVER_URL) as ast_tool_client, Client(SEARCH_MCP_SERVER_URL) as search_tool_client:
+        
+        ast_tool_call_command = ToolCall(ast_tool_client, "Call the tool with the given method and params")
+        ast_tool_list_command = ToolList(ast_tool_client, "List the available tools")
+        search_tool__call_command = ToolCall(search_tool_client, "Call the tool with the given method and params")
+        search_tool_list_command = ToolList(search_tool_client, "List the available tools") 
+        
         
         tools = await ast_tool_list_command.execute(None)
         log.info(f"Available tools: {tools}")
