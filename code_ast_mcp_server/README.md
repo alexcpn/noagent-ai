@@ -14,10 +14,10 @@ pinned: false
 
 MCP is the Model Context Protocol that is used to expose APIs to LLMs, both API description as well as a way to call the API through JSON-RPC.
 
-The MCP server exposes a method that gives the context of a Python function  and details about it including callee.
-This is in [tools\code_indexer.py](code_ast_mcp_server/tools/code_indexer.py)
-
-This tool is available to the LLM to get context for reviewing code snippet given to it in the repo
+The MCP server exposes multiple tools implemented in [tools\code_indexer.py](code_ast_mcp_server/tools/code_indexer.py):
+- `get_function_context_for_project_mcp` returns the definition and docstring for a function.
+- `get_function_references_mcp` lists the call sites for a given function.
+- `search_codebase_mcp` performs a lightweight string search across the indexed repository.
 
 The Server use the [TreeSitter project](https://tree-sitter.github.io/tree-sitter/) to do AST parsing of the source and extract, classes, methods, reference and doc stings. Currenly limited to Python files, but can easily extend to other languages that TreeSitter supports
 

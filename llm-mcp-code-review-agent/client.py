@@ -18,6 +18,26 @@ from urllib.parse import urlparse
 import requests
 
 
+def _render_value(value, indent: int) -> None:
+    pad = " " * indent
+    if isinstance(value, dict):
+        for key, val in value.items():
+            print(f"{pad}{key}:")
+            _render_value(val, indent + 2)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            print(f"{pad}- [{index}]")
+            _render_value(item, indent + 2)
+    elif isinstance(value, str):
+        if "\n" in value:
+            for line in value.splitlines():
+                print(f"{pad}{line}")
+        else:
+            print(f"{pad}{value}")
+    else:
+        print(f"{pad}{value}")
+
+
 def parse_repo(url: str) -> Tuple[str, str]:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -41,14 +61,21 @@ def build_payload(repo_url: str, pr_number: int, comment_url: str, comment_body:
     }
 
 
+def _print_json(response: requests.Response) -> None:
+    try:
+        data = response.json()
+    except ValueError:
+        print("Response:", response.text)
+    else:
+        print("Response:")
+        _render_value(data, 2)
+
+
 def trigger_review_get(agent_endpoint: str, repo_url: str, pr_number: int) -> None:
     params = {"repo_url": repo_url, "pr_number": pr_number}
     response = requests.get(agent_endpoint, params=params, timeout=60)
     print(f"Status code: {response.status_code}")
-    try:
-        print("Response:", response.json())
-    except ValueError:
-        print("Response:", response.text)
+    _print_json(response)
 
 
 def trigger_review_webhook(
@@ -67,10 +94,7 @@ def trigger_review_webhook(
 
     response = requests.post(agent_endpoint, json=payload, headers=headers, timeout=60)
     print(f"Status code: {response.status_code}")
-    try:
-        print("Response:", response.json())
-    except ValueError:
-        print("Response:", response.text)
+    _print_json(response)
 
 
 def main() -> None:

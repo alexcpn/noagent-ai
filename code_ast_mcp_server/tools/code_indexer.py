@@ -5,6 +5,7 @@ License: Proprietary
 """
 
 import os, textwrap
+from pathlib import Path
 from tree_sitter_languages import  get_language
 from tree_sitter import Parser
 import tempfile
@@ -19,6 +20,18 @@ all_refs = {}  # store all classes and functions in a dict
 code_ref ={} # hold the code bytes
 code_languages = {}  # track language per file for downstream queries
 
+DEFAULT_SEARCH_IGNORES: tuple[str, ...] = (
+    ".git",
+    ".hg",
+    ".svn",
+    ".mypy_cache",
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    ".venv",
+)
+
 LANGUAGE_NAME_MAP = {
     "python": "python",
     "go": "go",
@@ -32,6 +45,33 @@ def _collect_files(root_dir, extensions=None):
             if extensions is None or any(fname.endswith(ext) for ext in extensions):
                 all_files.append(os.path.join(dirpath, fname))
     return all_files
+
+
+def _decode_text(content_bytes: bytes):
+    try:
+        return content_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return content_bytes.decode("latin-1")
+        except UnicodeDecodeError:
+            return None
+
+
+def _ensure_repo_indexed(github_repo: str):
+    if github_repo in all_refs:
+        cached = all_refs[github_repo]
+        return cached["classes"], cached["functions"]
+
+    with tempfile.TemporaryDirectory() as project_root:
+        print(f"Cloning repo {github_repo} into {project_root}...")
+        Repo.clone_from(github_repo, project_root, depth=1)
+        print(f"Cloned repo {github_repo} into {project_root}.")
+        print(f"Indexing files in {project_root}...")
+        all_classes, all_functions = index_all_files(project_root, github_repo)
+        print(f"Indexed {len(all_classes)} classes and {len(all_functions)} functions.")
+
+    all_refs[github_repo] = {"classes": all_classes, "functions": all_functions}
+    return all_classes, all_functions
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +494,11 @@ def find_function_calls_within_project(function_name,github_repo):
     """
     Find all calls to `target_name` in the project.
     """
+    try:
+        _ensure_repo_indexed(github_repo)
+    except Exception as e:
+        return f"Error: {e}"
+
     contexts = " "
     # get all keys of dict code_ref
     all_files = code_ref.keys()
@@ -472,6 +517,64 @@ def find_function_calls_within_project(function_name,github_repo):
         contexts = f"\nNo calls to `{function_name}` found in the project."
     return contexts
 
+
+def search_codebase_for_project(
+    term: str,
+    github_repo: str,
+    file_patterns=None,
+    ignore_names=None,
+    max_results: int = 200,
+) -> str:
+    """
+    Search the indexed project for lines containing ``term``.
+    """
+    if not term:
+        return "Error: Search term must not be empty."
+
+    try:
+        _ensure_repo_indexed(github_repo)
+    except Exception as e:
+        return f"Error: {e}"
+
+    normalized_term = term.lower()
+    ignore_set = set(DEFAULT_SEARCH_IGNORES)
+    if ignore_names:
+        if isinstance(ignore_names, str):
+            ignore_names = [ignore_names]
+        ignore_set.update(ignore_names)
+
+    if isinstance(file_patterns, str):
+        file_patterns = [file_patterns]
+
+    matches = []
+    for key, content_bytes in code_ref.items():
+        if not key.startswith(github_repo):
+            continue
+
+        rel_path = key[len(github_repo):].lstrip("/\\")
+        display_path = rel_path or key
+        path_obj = Path(rel_path) if rel_path else Path(display_path)
+
+        if any(part in ignore_set for part in path_obj.parts[:-1]):
+            continue
+        if file_patterns and not any(path_obj.match(pattern) for pattern in file_patterns):
+            continue
+
+        text = _decode_text(content_bytes)
+        if text is None:
+            continue
+
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if normalized_term in line.lower():
+                matches.append(f"{display_path}:{line_number}: {line}")
+                if len(matches) >= max_results:
+                    return "\n".join(matches)
+
+    if not matches:
+        return "No matches found."
+
+    return "\n".join(matches)
+
 def get_function_context_for_project(function_name:str, github_repo:str,)-> str:
     """
     Get the details of a function in a GitHub repo along with its callees.
@@ -481,31 +584,12 @@ def get_function_context_for_project(function_name:str, github_repo:str,)-> str:
     @param project_root: The root directory of the project.
     """
     try:
-        
-        if  github_repo in all_refs:
-            all_classes = all_refs[github_repo]["classes"]
-            all_functions = all_refs[github_repo]["functions"]
-        else:
-            # Create temporary directory
-            temp_dir = tempfile.TemporaryDirectory()
-            project_root = temp_dir.name
-            # Clone the repo
-            print(f"Cloning repo {github_repo} into {project_root}...")
-            Repo.clone_from(github_repo, project_root,depth=1)
-            print(f"Cloned repo {github_repo} into {project_root}.")
-            # index all files
-            print(f"Indexing files in {project_root}...")
-            all_classes, all_functions =index_all_files(project_root,github_repo)
-            print(f"Indexed {len(all_classes)} classes and {len(all_functions)} functions.")
-            
-            # store this in a dict
-            all_refs[github_repo] = {"classes": all_classes, "functions": all_functions}
-        # store this in a dict
+        _, all_functions = _ensure_repo_indexed(github_repo)
         contex = get_function_context(function_name,all_functions,github_repo)
         return contex
     except Exception as e:
         return f"Error: {e}"
-    
+
 
 
 if __name__ == "__main__":
