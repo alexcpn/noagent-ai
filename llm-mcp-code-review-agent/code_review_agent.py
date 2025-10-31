@@ -9,13 +9,10 @@ import os
 import sys
 import json
 import inspect
-import asyncio
 from fastmcp import Client
 from openai import OpenAI
 from dotenv import load_dotenv
 import requests
-import re
-from collections import defaultdict
 import logging as log
 from datetime import datetime
 from fastapi import FastAPI, Request, Header
@@ -27,6 +24,7 @@ print(f"Parent directory: {parentdir}")
 # add the parent directory to the system path
 sys.path.append(parentdir)
 from nmagents.command import CallLLM, ToolCall, ToolList,num_tokens_from_string
+import git_uitls
 
 # configure logging
 
@@ -82,43 +80,13 @@ MODEL_NAME= "gpt-4.1-nano"
 
 
 app = FastAPI()
-GITLAB_TOKEN = os.getenv("GITLAB_TOKEN")  # GitLab personal access token
 
-def get_pr_diff_url(repo_url, pr_number):
-    """ 
-    Get the diff URL for a specific pull request number.
-    Args:
-        repo_url (str): The URL of the GitHub repository.
-        pr_number (int): The pull request number.
-    """
-    pr_diff_url = f"https://patch-diff.githubusercontent.com/raw/{repo_url.split('/')[-2]}/{repo_url.split('/')[-1]}/pull/{pr_number}.diff"
-    response = requests.get(pr_diff_url)
-
-    if response.status_code != 200:
-        log.info(f"Failed to fetch diff: {response.status_code}")
-        exit()
-
-    if response.status_code != 200:
-        log.info(f"Failed to fetch diff: {response.status_code}")
-        exit()
-
-    diff_text = response.text
-    file_diffs = defaultdict(str)
-    file_diff_pattern = re.compile(r'^diff --git a/(.*?) b/\1$', re.MULTILINE)
-    split_points = list(file_diff_pattern.finditer(diff_text))
-    for i, match in enumerate(split_points):
-        file_path = match.group(1)
-        start = match.start()
-        end = split_points[i + 1].start() if i + 1 < len(split_points) else len(diff_text)
-        file_diffs[file_path] = diff_text[start:end]
-    return file_diffs
-    
 
 async def main(repo_url,pr_number):
 
     # Example: get the diff for a specific PR
     print(f"Fetching diffs for PR #{pr_number} from {repo_url}...")
-    file_diffs = get_pr_diff_url(repo_url, pr_number)
+    file_diffs = git_uitls.get_pr_diff_url(repo_url, pr_number)
     print(f"Fetched diffs for {len(file_diffs)} files in PR #{pr_number} from {repo_url}")
     
     #------------------------------------------------
@@ -244,44 +212,6 @@ async def review(repo_url: str, pr_number: int):
     return JSONResponse(content={"status": "ok", "review_comment": review_comment or "No review comment produced."})
 
 
-@app.route("/webhook", methods=["POST"])
-async def webhook(request: Request, x_github_event: str = Header(...)):
-    try:
-        x_github_event = request.headers.get("X-GitHub-Event")
-        log.info(f"Received webhook event: {x_github_event}")
-        data = await request.json()
-    except Exception as e:
-        log.error(f"Error parsing JSON: {e}")
-        return JSONResponse(content={"status": "error", "message": "Invalid JSON"}, status_code=400)
-    log.info(f"Webhook data: {data}")
-        # Handle PR review comment events
-    if x_github_event == "pull_request_review_comment":
-        comment_body = data.get("comment", {}).get("body", "")
-        if "@code_review" in comment_body:
-            repo_full_name = data["repository"]["full_name"]               # e.g. alexcpn/accelerate-test
-            pr_url = data["comment"]["pull_request_url"]                   # e.g. .../pulls/1
-            pr_number = int(pr_url.split("/")[-1])
-            repo_url = f"https://github.com/{repo_full_name}"
-
-            log.info(f"Triggered code review on {repo_url} PR #{pr_number}")
-
-            review_comment = await main(repo_url, pr_number) or "No issues found."
-
-            # Post back to the same thread
-            comment_url = data["comment"]["url"]
-            headers = {
-                "Authorization": f"token {GITLAB_TOKEN}",
-                "Accept": "application/vnd.github+json"
-            }
-            post_response = requests.post(
-                comment_url,
-                headers=headers,
-                json={"body": f"AI Code Review:\n```\n{review_comment}\n```"}
-            )
-            log.info(f"Posted review result: {post_response.status_code}")
-            return JSONResponse(content={"status": "review triggered"})
-        
-    return JSONResponse(content={"status": "ok"})
 # 
 # if __name__ == "__main__":
 #     repo_url = "https://github.com/huggingface/accelerate"
