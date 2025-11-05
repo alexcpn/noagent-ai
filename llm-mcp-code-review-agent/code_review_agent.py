@@ -5,27 +5,24 @@ This is a simple python based Code Review Agent flow using OpenAI LLM APIs amd M
 Design patterns like Command Pattern are used along with for loops to stucture flow and response as we need
 
 """
+import git_utils
+from fastmcp import Client
+from openai import OpenAI
+from dotenv import load_dotenv
+import logging as log
+from datetime import datetime
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import os
 import sys
 import json
 import inspect
-from fastmcp import Client
-from openai import OpenAI
-from dotenv import load_dotenv
-import requests
-import logging as log
-from datetime import datetime
-from fastapi import FastAPI, Request, Header
-from fastapi.responses import JSONResponse
-
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 parentdir = os.path.dirname(currentdir)
 print(f"Parent directory: {parentdir}")
 # add the parent directory to the system path
 sys.path.append(parentdir)
 from nmagents.command import CallLLM, ToolCall, ToolList,num_tokens_from_string
-import git_uitls
-
 # configure logging
 
 __author__ = "Alex Punnen"
@@ -86,7 +83,7 @@ async def main(repo_url,pr_number):
 
     # Example: get the diff for a specific PR
     print(f"Fetching diffs for PR #{pr_number} from {repo_url}...")
-    file_diffs = git_uitls.get_pr_diff_url(repo_url, pr_number)
+    file_diffs = git_utils.get_pr_diff_url(repo_url, pr_number)
     print(f"Fetched diffs for {len(file_diffs)} files in PR #{pr_number} from {repo_url}")
     
     #------------------------------------------------

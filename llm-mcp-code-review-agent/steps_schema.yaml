@@ -1,0 +1,7 @@
+version: 1
+steps:
+  - name: step1
+    description: First step description.
+  - name: step2
+    description: Second step description.
+ 

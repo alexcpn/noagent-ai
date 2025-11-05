@@ -108,8 +108,11 @@ class ReviewPlanner:
             "CODE_AST_MCP_SERVER_URL",
             "http://127.0.0.1:7860/mcp",
         )
-        tool_call_example = '{"server": "<ast|lint>", "method": "<method name>", "params": {"<param 1 name>": <param 1 value>, "...": "..."}}'
+        self.ast_server_url = ast_server_url
+        tool_call_example = 'TOOL_CALL:{"server": "ast", "method": "<method name>", "params": {"<param 1 name>": <param 1 value>, "...": "..."}}'
         tool_schemas = self._load_tool_schemas(ast_server_url)
+        self.tool_schemas = tool_schemas
+        self.tool_call_example = tool_call_example
 
         self._planner_agent = Agent(
             name="Review Planner",
@@ -121,14 +124,14 @@ class ReviewPlanner:
                 Keep between {self.min_tasks} and {self.max_tasks} steps. Each step should focus on a distinct review concern.
                 Never add commentary outside the JSON object.
 
-                You should generate tool calls to get more context about the code that you are reviewing if needed.
-                Available tool schemas:
-                {tool_schemas}
-                1. **Format**: Every tool call must start with: 'TOOL_CALL:<JSON>'  where `<JSON>` is a valid JSON object matching one of the tool schemas {tool_schemas}
-                2. **No extra text**: Do **not** prepend or append any other words or punctuation to the JSON.
-                **Example tool call** 
+                Always populate the `prompt` for each step. When deeper context is needed, embed a literal TOOL_CALL that
+                follows this format:
                 {tool_call_example}
-                
+
+                Only use methods described in these tool schemas:
+                {tool_schemas}
+
+                Ensure that at least one step includes an AST look-up via TOOL_CALL and clearly states why the tool is needed.
                 """
             ).strip(),
             model=model,
@@ -140,13 +143,18 @@ class ReviewPlanner:
             f"""
             Plan a thorough review for pull request changes in '{self.repo_url}'.
             Focus on high-risk areas, cross-file impacts, and where tooling might help.
+            For every step, set the `prompt` value to the exact instructions the reviewer should follow.
+            Include TOOL_CALL snippets in the `prompt` whenever an MCP lookup would clarify context.
+            At least one step must include a TOOL_CALL that targets an AST method to inspect a symbol or file touched by the diff.
 
             Diffs to consider:
             {self.review_context}
             """
         ).strip()
 
+        print("Planner: Thinking...")
         result = Runner.run_sync(self._planner_agent, planner_prompt)
+        print("Planner: Response received.")
         plan_text = result.final_output.strip()
         steps_payload = self._parse_plan(plan_text)
 
@@ -257,6 +265,9 @@ def plan_review(
 def execute_step(
     model: OpenAIChatCompletionsModel,
     review_context: str,
+    tool_schemas: str,
+    tool_call_example: str,
+    ast_server_url: str,
     step_number: int,
     step: ReviewTask,
 ) -> str:
@@ -272,13 +283,15 @@ def execute_step(
             You are performing code review step {step_number}: {title}.
             Focus on the goal: {goal}.
             Provide specific, actionable feedback grounded in the diff.
+            You may request extra context via TOOL_CALL snippets as needed.
+            After each tool result, continue the analysis instead of stopping early.
             Keep the answer concise and use bullet points when appropriate.
             """
         ).strip(),
         model=model,
     )
 
-    review_prompt = dedent(
+    base_prompt = dedent(
         f"""
         Pull request diff under review:
 
@@ -289,12 +302,97 @@ def execute_step(
         Step goal: {goal}
         Additional guidance: {extra_prompt}
 
-        Produce the findings for this step.
+        Tool schema reference:
+        {tool_schemas}
+
+        Tool call format:
+        {tool_call_example}
+
+        Produce the findings for this step. If you need additional information,
+        emit a TOOL_CALL exactly as specified. After receiving tool output you will
+        be given another chance to continue the review.
         """
     ).strip()
 
-    result = Runner.run_sync(reviewer, review_prompt)
-    return result.final_output.strip()
+    context = base_prompt
+    max_iterations = 5
+
+    def _invoke_tool(server: str, method: str, params: dict[str, Any]) -> tuple[str, bool]:
+        target_url: str | None = None
+        if server == "ast":
+            target_url = ast_server_url
+        else:
+            return (f"Unknown server '{server}'. Supported: ['ast'].", False)
+
+        print(f"Tool calling -> server='{server}', method='{method}'")
+
+        async def _call() -> Any:
+            async with Client(target_url) as client:
+                return await client.call_tool(method, params)
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(_call())
+            success = True
+        except Exception as exc:  # pragma: no cover - network failures
+            result = f"Error invoking tool '{method}': {exc}"
+            success = False
+        finally:
+            loop.close()
+            ReviewPlanner._ensure_default_event_loop()
+        print("Tool response received.")
+        return result, success
+
+    for _ in range(max_iterations):
+        print(f"Step {step_number}: Thinking...")
+        result = Runner.run_sync(reviewer, context)
+        output = result.final_output.strip()
+        print(f"Step {step_number}: Response received.")
+        normalized = output.lstrip()
+
+        if normalized.upper().startswith("DONE:"):
+            return normalized[5:].strip() or output
+
+        if normalized.startswith("TOOL_CALL:"):
+            payload_str = normalized[len("TOOL_CALL:") :].strip()
+            try:
+                payload = json.loads(payload_str)
+            except json.JSONDecodeError as exc:
+                context += (
+                    "\nTool call error: "
+                    f"{exc}. Original payload: {payload_str}\n"
+                    "Please issue a corrected TOOL_CALL."
+                )
+                continue
+
+            server = str(payload.get("server", "ast")).lower()
+            method = payload.get("method")
+            params = payload.get("params", {})
+            if not method:
+                context += (
+                    "\nTool call error: 'method' is required in the TOOL_CALL payload.\n"
+                    "Please resend the TOOL_CALL with a valid method."
+                )
+                continue
+
+            tool_result, success = _invoke_tool(server, method, params if isinstance(params, dict) else {})
+            if not isinstance(tool_result, str):
+                try:
+                    tool_result = json.dumps(tool_result, indent=2, default=str)
+                except TypeError:
+                    tool_result = str(tool_result)
+            context += (
+                f"\nTool call request ({'success' if success else 'failed'}):\n"
+                f"{payload_str}\n"
+                f"Tool result:\n{tool_result}\n"
+                "Continue the review incorporating this information. "
+                "Emit another TOOL_CALL if further context is needed, otherwise deliver your findings."
+            )
+            continue
+
+        return output
+
+    return "Review step terminated after too many TOOL_CALL attempts without a final answer."
 
 
 def main() -> None:
@@ -312,12 +410,22 @@ def main() -> None:
     print("Planned review steps:")
     for index, task in enumerate(tasks, start=1):
         print(f"  {index}. {task.title}: {task.goal}")
+        if task.prompt:
+            print(f"     Prompt: {task.prompt}")
 
     review_context = planner.review_context
 
     print("\nExecuting review steps...\n")
     for index, task in enumerate(tasks, start=1):
-        findings = execute_step(model, review_context, index, task)
+        findings = execute_step(
+            model,
+            review_context,
+            planner.tool_schemas,
+            planner.tool_call_example,
+            planner.ast_server_url,
+            index,
+            task,
+        )
         print(f"=== Step {index}: {task.title} ===")
         print(findings)
         print()

@@ -32,4 +32,4 @@ def get_pr_diff_url(repo_url, pr_number):
         end = split_points[i + 1].start() if i + 1 < len(split_points) else len(diff_text)
         file_diffs[file_path] = diff_text[start:end]
     return file_diffs
-    
+

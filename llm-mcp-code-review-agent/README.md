@@ -60,6 +60,14 @@ Example of the Webhook setting
 
 ![web hook](https://i.postimg.cc/LXcjtpv5/image.png)
 
+### Schema-Driven Task Execution
+
+- Use `task_schema.yaml` to describe available tasks and tools, then load it with `SchemaAgent`.
+- Run `python3 schema_agent_demo.py --task fetch_pr_diffs --param repo_url=https://github.com/huggingface/accelerate --param pr_number=3321 --pretty` to execute the sample task.
+- The agent casts inputs to the types declared in the schema and returns outputs following the same shape.
+- Extend the schema with additional tools and tasks to auto-register new capabilities without hand-writing glue code.
+- Inline `language: python` implementations are supported right inside the YAML, so you can ship small helper functions (like iterating file diffs) without creating extra modules.
+
 ### Output for one of the diff files using `gpt-4.1-nano` LLM and this MCP Server
 
  ```

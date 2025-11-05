@@ -75,7 +75,7 @@ def trigger_review_get(agent_endpoint: str, repo_url: str, pr_number: int) -> No
     params = {"repo_url": repo_url, "pr_number": pr_number}
     response = requests.get(agent_endpoint, params=params, timeout=60)
     print(f"Status code: {response.status_code}")
-    _print_json(response)
+    #_print_json(response)
 
 
 def trigger_review_webhook(
