@@ -1,7 +1,20 @@
+---
 version: 1
 steps:
-  - name: step1
-    description: First step description.
-  - name: step2
-    description: Second step description.
- 
+  summary: brief summary of the steps and what you are trying to achieve
+  -step1:
+    description: >
+      Describe the first step in detail. If any tool is used, mention the
+      tool name and parameters. If more context is needed for the code to be
+      reviewed, like caller or callee or function references, mention the tool
+      to be used to get that context as given in tools schemal yaml. Example
+      below
+    -tool:
+      name: ast_mcp_tools
+      function_name: get_function_context_for_project_mcp
+      parameters:
+        github_repo: example/repo
+        function_name: example_function
+  -step2:
+    description: Second step description. If no tool is used, just describe the
+      step.Contibue for all steps needed for the code review.

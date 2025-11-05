@@ -1,0 +1,72 @@
+---
+tools:
+  - name: ast_mcp_tools
+    type: mcp_server
+    description: MCP-powered codebase analysis helpers.
+    functions:
+      - name: get_function_context_for_project_mcp
+        description: |
+          Get the details of a function in a GitHub repo along with its callees.
+        inputSchema:
+          properties:
+            function_name:
+              title: Function Name
+              type: string
+            github_repo:
+              title: Github Repo
+              type: string
+          required:
+            - function_name
+            - github_repo
+          type: object
+      - name: get_function_references_mcp
+        description: |
+          Get the references of a function in a GitHub repo.
+        inputSchema:
+          properties:
+            function_name:
+              title: Function Name
+              type: string
+            github_repo:
+              title: Github Repo
+              type: string
+          required:
+            - function_name
+            - github_repo
+          type: object
+      - name: search_codebase_mcp
+        description: >
+          Search the repository for `term` and return matching lines in a
+          grep-like format.
+        inputSchema:
+          properties:
+            term:
+              title: Term
+              type: string
+            github_repo:
+              title: Github Repo
+              type: string
+            file_patterns:
+              anyOf:
+                - items:
+                    type: string
+                  type: array
+                - type: "null"
+              default: null
+              title: File Patterns
+            ignore_names:
+              anyOf:
+                - items:
+                    type: string
+                  type: array
+                - type: "null"
+              default: null
+              title: Ignore Names
+            max_results:
+              default: 200
+              title: Max Results
+              type: integer
+          required:
+            - term
+            - github_repo
+          type: object

@@ -1,67 +1,20 @@
 version: 1
 tasks:
-  - name: fetch_pr_diffs
-    description: Fetch the diffs for a specific pull request from a Git repository.
+  - task_name: fetch_pr_diffs
     inputs:
       - name: repo_url
-        type: string
-        description: The URL of the Git repository.
       - name: pr_number
-        type: integer
-        description: The number of the pull request to fetch diffs for.
     outputs:
       - name: file_diffs
-        type: object
-        description: A mapping of file names to their respective diffs in the pull request.
-  - name: iterate_file_diffs
+    tools:
+      - tool_name: git_utils
+
+  - task_name: iterate_file_diffs
     description: Expand a file diff mapping into an ordered list of per-file diff entries.
     inputs:
       - name: file_diffs
-        type: object
-        description: A mapping of file names to their respective diffs in the pull request.
     outputs:
       - name: entries
-        type: array
         description: A list of objects containing file names and their diff text.
-tools:
-  - name: git_utils
-    module: git_utils
-    description: A utility module for interacting with Git repositories.
-    functions:
-      - name: get_pr_diff_url
-        description: Fetch the diffs for a specific pull request from a Git repository.
-        inputs:
-          - name: repo_url
-            type: string
-            description: The URL of the Git repository.
-          - name: pr_number
-            type: integer
-            description: The number of the pull request to fetch diffs for.
-        outputs:
-          - name: file_diffs
-            type: object
-            description: A mapping of file names to their respective diffs in the pull request.
-  - name: inline_diff_tasks
-    description: Helper utilities for processing pull request diffs.
-    functions:
-      - name: iterate_file_diffs
-        description: Expand a file diff mapping into an ordered list of per-file diff entries.
-        language: python
-        implementation: |
-          from collections.abc import Mapping
-
-          def iterate_file_diffs(file_diffs):
-              if not isinstance(file_diffs, Mapping):
-                  raise ValueError("file_diffs must be a mapping of file names to diff text")
-              entries = []
-              for file_name, diff in file_diffs.items():
-                  entries.append({"file_name": str(file_name), "diff": diff})
-              return {"entries": entries}
-        inputs:
-          - name: file_diffs
-            type: object
-            description: A mapping of file names to their respective diffs in the pull request.
-        outputs:
-          - name: entries
-            type: array
-            description: A list of objects containing file names and their diff text.
+    tools:
+      - tool_name: inline_diff_tasks

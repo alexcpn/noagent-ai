@@ -97,88 +97,44 @@ async def main(repo_url,pr_number):
     call_llm_command = CallLLM(openai_client, "Call the LLM with the given context", MODEL_NAME, COST_PER_TOKEN_INPUT,COST_PER_TOKEN_OUTPUT, 0.5)
     
     # this this the MCP client invoking the tool - the code review MCP server
-    async with Client(AST_MCP_SERVER_URL) as ast_tool_client, Client(SEARCH_MCP_SERVER_URL) as search_tool_client:
+    async with Client(AST_MCP_SERVER_URL) as ast_tool_client:
         
-        ast_tool_call_command = ToolCall(ast_tool_client, "Call the tool with the given method and params")
-        ast_tool_list_command = ToolList(ast_tool_client, "List the available tools")
-        search_tool_call_command = ToolCall(search_tool_client, "Call the tool with the given method and params")
-        search_tool_list_command = ToolList(search_tool_client, "List the available tools") 
-        
-        ast_tools = await ast_tool_list_command.execute(None)
-        search_tools = await search_tool_list_command.execute(None)
-
-        def _normalize_tools(raw_tools):
-            normalized = []
-            for item in raw_tools or []:
-                if isinstance(item, dict):
-                    normalized.append(item)
-                elif hasattr(item, "model_dump"):
-                    normalized.append(item.model_dump())
-                elif hasattr(item, "__dict__"):
-                    normalized.append({
-                        key: value
-                        for key, value in item.__dict__.items()
-                        if not key.startswith("_")
-                    })
-                else:
-                    normalized.append(str(item))
-            return normalized
-
-        normalized_ast_tools = _normalize_tools(ast_tools)
-        normalized_search_tools = _normalize_tools(search_tools)
-
-        tool_schemas = json.dumps(
-            {"ast": normalized_ast_tools,"search": normalized_search_tools,},
-            indent=2,
-        )
+        # ast_tool_call_command = ToolCall(ast_tool_client, "Call the tool with the given method and params")
+        # ast_tool_list_command = ToolList(ast_tool_client, "List the available tools")
+       
         # read the task schema.yaml file
         sample_task_schema_file = "task_schema.yaml"
-        log.info(f"Using task schema file: {sample_task_schema_file}")
         with open(sample_task_schema_file, "r", encoding="utf-8") as f:
             task_schema_content = f.read()
-        log.info(f"Available AST tools: {ast_tools}")
         
         sample_step_schema_file = "steps_schema.yaml"
         log.info(f"Using step schema file: {sample_step_schema_file}")
         with open(sample_step_schema_file, "r", encoding="utf-8") as f:
             step_schema_content = f.read()
-            
-        #log.info(f"Available search tools: {search_tools}")
-        # Example: log.info diffs for all files (trimmed)
+      
+        tool_schemas = "tools.yaml"
+        log.info(f"Using  tools file: {tool_schemas}")
+        with open(tool_schemas, "r", encoding="utf-8") as f:
+            tool_schemas_content = f.read()
+                  
+        file_diffs = git_utils.get_pr_diff_url(repo_url, pr_number)
        
-        tool_call_example ='{"server": "<ast|search>", "method": "<method name>", "params": {"<param 1 name>": <param 1 value>, "...": "..."}}'
-        context_lists =[f"""
-        You are an expert Task Creator. 
-        Your task today is Code Reivew based on git diffs.
-        You are given the following '{pr_number}' to review from the repo '{repo_url}' 
-        
+        main_context =f"""
+        Your task today is Code Reivew. You are given the following '{pr_number}' to review from the repo '{repo_url}' 
         You have to first come up with a plan to review the code changes in the PR as a series of steps.
-        It could be steps like getting code snippets, file diffs, search codebase etc to get the required information 
-        to write the review.  You need to write the plan in the step yaml schema format.
-        You have access to the following tools to help you with your code review: {tool_schemas} 
-        Here is an example of how to call the tools: {tool_call_example}
+        For the review, check for adherence to code standards, correctness of implementation, test coverage,
+        and impact on existing functionality.   You can split these also as different steps in your plan.
         Write the plan as per the following step schema: {step_schema_content}
         Make sure to follow the step schema format exactly and output only the yaml between codeblocks ``` and  ```.
-        """,
-        f"""
-        You are an expert Code Review Agent. 
-        Your task today is Code Reivew based on git diffs.
-        You are given the following '{pr_number}' to review from the repo '{repo_url}'        
-        Then you need to use the available tools to get code snippets, file diffs, search codebase etc to get the required information 
-        to write the review.  You need to write the review in the task yaml schema format.
-        Make sure to follow the task schema format exactly.
-        
-        For the review, check for adherence to code standards, correctness of implementation, test coverage, and impact on existing functionality.
-        You have access to the following tools to help you with your code review: {tool_schemas} 
-        Here is the task schema you need to follow to write the code review:     {task_schema_content}
-        
-        Give the final task yaml scheama and give the final line as DONE when you are done with the review.
-        """,
-        ]
-        
-        context = context_lists[0]  
-        more_steps = True
-        while more_steps:
+        """
+        log.info("-"*80)
+        log.info(f"Generating code review plan for PR #{pr_number} from {repo_url}...{main_context}")
+        log.info("-"*80)
+        context = main_context
+        for file_path, diff in file_diffs.items():
+            log.info("-"*80)
+            context = main_context + f" Here is the file diff for {file_path}:\n{diff} for review\n" + \
+                f"You have access to the following MCP tools to help you with your code review: {tool_schemas_content}"
             response = call_llm_command.execute(context)
             # log.info the response
             log.debug(f"LLM response: {response}")
@@ -189,24 +145,73 @@ async def main(repo_url,pr_number):
                 response_data = yaml.safe_load(yaml_payload)
             except Exception as exc:
                 log.error(f"Error parsing LLM response as YAML: {exc}")
-                response_data = {}  
-                break
-            
-            log.info("Parsed LLM response data in yaml")
-            # go throught the parsed response_data to see if its a plan or final review
-            steps = response_data.get("steps", [])
-            for index, step in enumerate(steps, start=1):
+                return response
+            with open(f"./logs/step_{time_hash}.yaml", "w", encoding="utf-8") as f:
+                    yaml.dump(response_data, f)  
+            return
+        #------------------------------------------------------------------
+        # go throught the parsed response_data to see if its a plan or final review
+        #------------------------------------------------------------------
+        
+        log.info("Parsed LLM response data in yaml")
+        
+        steps = response_data.get("steps", [])
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, dict):
+                log.warning("Skipping step %s because it is not a mapping: %r", index, step)
+                continue
+            name = step.get("name", "<unnamed>")
+            description = step.get("description", "")
+            log.info(f"Step {index}: {name}")
+            log.info(f"Description: {description}")
+                         
+        #------------------------------------------------------------------
+        # Execute each step in the plan
+        #------------------------------------------------------------------
+        def get_prompt_for_step(name, desc):
+            return f"""
+                You are an expert task executor.
+                You are give Step: {name} to execute with details: {desc}\n
+                You need to create yaml like {task_schema_content} to execute the step. 
+                You have access to the following MCP tools to help you with your code review: {tool_schemas_content} 
+                Make sure to follow the task schema format exactly and output only the yaml between codeblocks ``` and  ```.
+                """
+        
+        
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, dict):
+                log.warning("Skipping step %s because it is not a mapping: %r", index, step)
+                continue
+            name = step.get("name", "<unnamed>")
+            description = step.get("description", "")
+            prompt =get_prompt_for_step(name, description)
+        
+            response = call_llm_command.execute(prompt)
+            # log.info the response
+            log.debug(f"LLM response: {response}")
+            #parse the yaml response to check if its a plan or final review
+            try:
+                code_blocks = extract_code_blocks(response)
+                yaml_payload = code_blocks[0] if code_blocks else response
+                response_data = yaml.safe_load(yaml_payload)
+            except Exception as exc:
+                log.error(f"Error parsing LLM response as YAML: {exc}")
+                return response
+            log.info(f"Response data for step {name}: {response_data}")
+        
+            tasks = response_data.get("tasks", [])
+            for index, step in enumerate(tasks, start=1):
                 if not isinstance(step, dict):
                     log.warning("Skipping step %s because it is not a mapping: %r", index, step)
                     continue
-
-                name = step.get("name", "<unnamed>")
-                description = step.get("description", "")
-                log.info(f"Step {index}: {name}")
-                log.info(f"Description: {description}")
-                         
-           
-            more_steps = False  # for now only one iteration  
+                task_name = step.get("task_name", "<unnamed>")
+                inputs = step.get("inputs", {})
+                tools = step.get("tools", [])
+                log.info(f"task_name {task_name}: {inputs} Tools: {tools}")
+                # write the yaml back to file for debugging
+                with open(f"./logs/task_{name}_{task_name}_{time_hash}.yaml", "w", encoding="utf-8") as f:
+                    yaml.dump(step, f)
+                
             
             # Check if the response is a valid JSON
             # if response.startswith("TOOL_CALL:"):
