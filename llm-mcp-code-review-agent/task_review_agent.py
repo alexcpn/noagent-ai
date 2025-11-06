@@ -74,6 +74,8 @@ openai_client = OpenAI(
     base_url="https://api.openai.com/v1"
 )
 MODEL_NAME = "gpt-4.1-nano"
+FALLBACK_MODEL_NAME = os.getenv("YAML_REPAIR_MODEL", "gpt-4o-mini")
+FALLBACK_MAX_BUDGET = float(os.getenv("YAML_REPAIR_MAX_BUDGET", "0.2"))
 
 # openai_client = OpenAI(
 #     api_key="sk-local",
@@ -93,6 +95,61 @@ def extract_code_blocks(text: str) -> list[str]:
     # Match ```lang (optional) ... ``` with DOTALL so newlines are included.
     pattern = r"```(?:\w+\n)?(.*?)```"
     return [block.strip() for block in re.findall(pattern, text, re.S)]
+
+
+def parse_yaml_response_with_repair(
+    response_text: str,
+    *,
+    schema_hint: str | None,
+    repair_command: CallLLM | None,
+    context_label: str,
+) -> tuple[dict[str, Any], str]:
+    """
+    Try to parse the response as YAML; if that fails, ask a cheaper model
+    to repair the payload so it conforms to the expected schema.
+    """
+    code_blocks = extract_code_blocks(response_text)
+    yaml_payload = code_blocks[0] if code_blocks else response_text
+    try:
+        data = yaml.safe_load(yaml_payload)
+        return data or {}, yaml_payload
+    except yaml.YAMLError as exc:
+        log.error("%s: YAML parse failed: %s", context_label, exc)
+        if repair_command is None:
+            raise
+        repair_prompt_parts = [
+            "You are given YAML content that failed to parse. "
+            "Return corrected YAML that matches the expected schema.",
+        ]
+        if schema_hint:
+            repair_prompt_parts.append(
+                "The schema or template to follow is:\n"
+                f"{schema_hint}\n"
+            )
+        repair_prompt_parts.append(
+            "Broken YAML:\n```yaml\n"
+            f"{yaml_payload}\n"
+            "```\n"
+            f"Parser error: {exc}\n"
+            "Return only the fixed YAML inside a single ```yaml``` block."
+        )
+        repair_prompt = "\n".join(repair_prompt_parts)
+        log.info(
+            "%s: attempting YAML repair with model %s",
+            context_label,
+            repair_command.model,
+        )
+        repair_response = repair_command.execute(repair_prompt)
+        repair_blocks = extract_code_blocks(repair_response or "")
+        repaired_payload = repair_blocks[0] if repair_blocks else repair_response
+        try:
+            data = yaml.safe_load(repaired_payload)
+            return data or {}, repaired_payload
+        except yaml.YAMLError as repair_exc:
+            raise ValueError(
+                f"{context_label}: failed to repair YAML; "
+                f"original error: {exc}; repair error: {repair_exc}"
+            ) from repair_exc
 
 
 def _collect_tool_specs(step: dict[str, Any]) -> list[dict[str, Any]]:
@@ -201,10 +258,32 @@ async def main(repo_url, pr_number):
     call_llm_command = CallLLM(openai_client, "Call the LLM with the given context",
                                MODEL_NAME, COST_PER_TOKEN_INPUT, COST_PER_TOKEN_OUTPUT, 0.5)
 
+    repair_llm_command = CallLLM(
+        openai_client,
+        "Repair invalid YAML responses",
+        FALLBACK_MODEL_NAME,
+        COST_PER_TOKEN_INPUT,
+        COST_PER_TOKEN_OUTPUT,
+        FALLBACK_MAX_BUDGET,
+    )
+
 
     def load_prompt(**placeholders) -> str:
         template = TEMPLATE_PATH.read_text(encoding="utf-8")
-        return template.format(**placeholders)
+        default_values = {
+            "arch_notes_or_empty": "",
+            "guidelines_list_or_link": "",
+            "threat_model_or_empty": "",
+            "perf_slos_or_empty": "",
+            "tool_outputs": "",
+            "diff_or_code_block": "",
+        }
+        merged = {**default_values, **placeholders}
+        for key, value in merged.items():
+            value_str = str(value)
+            template = template.replace(f"{{{{{key}}}}}", value_str)
+            template = template.replace(f"{{{key}}}", value_str)
+        return template
 
     # this this the MCP client invoking the tool - the code review MCP server
     async with Client(AST_MCP_SERVER_URL) as ast_tool_client:
@@ -256,9 +335,12 @@ async def main(repo_url, pr_number):
             log.info(f"LLM response: {response}")
             # parse the yaml response to check if its a plan or final review
             try:
-                code_blocks = extract_code_blocks(response)
-                yaml_payload = code_blocks[0] if code_blocks else response
-                response_data = yaml.safe_load(yaml_payload)
+                response_data, _ = parse_yaml_response_with_repair(
+                    response_text=response or "",
+                    schema_hint=step_schema_content,
+                    repair_command=repair_llm_command,
+                    context_label="plan",
+                )
                 # Now go through the steps for this file diff and execute it and
                 # append that to the context for next iteration
                 steps = response_data.get("steps", [])
@@ -287,9 +369,12 @@ async def main(repo_url, pr_number):
                     log.info(f"LLM response after tool call: {response}")
                     # write this response to a yaml file
                     try:
-                        code_blocks = extract_code_blocks(response)
-                        yaml_payload = code_blocks[0] if code_blocks else response
-                        response_data = yaml.safe_load(yaml_payload)
+                        response_data, _ = parse_yaml_response_with_repair(
+                            response_text=response or "",
+                            schema_hint=None,
+                            repair_command=repair_llm_command,
+                            context_label=f"step {name} result",
+                        )
                         with open(f"./logs/step_out_{name}_{time_hash}.yaml", "w", encoding="utf-8") as f:
                             yaml.dump(response_data, f)
                     except Exception as exc:
@@ -297,7 +382,7 @@ async def main(repo_url, pr_number):
                         continue
 
             except Exception as exc:
-                log.error(f"Error parsing LLM response as YAML: {exc}")
+                log.error(f"Unable to parse plan YAML even after repair: {exc}")
                 return response
             with open(f"./logs/step_{time_hash}.yaml", "w", encoding="utf-8") as f:
                 yaml.dump(response_data, f)
@@ -333,9 +418,12 @@ async def main(repo_url, pr_number):
             log.debug(f"LLM response: {response}")
             # parse the yaml response to check if its a plan or final review
             try:
-                code_blocks = extract_code_blocks(response)
-                yaml_payload = code_blocks[0] if code_blocks else response
-                response_data = yaml.safe_load(yaml_payload)
+                response_data, _ = parse_yaml_response_with_repair(
+                    response_text=response or "",
+                    schema_hint=task_schema_content,
+                    repair_command=repair_llm_command,
+                    context_label=f"task plan {name}",
+                )
             except Exception as exc:
                 log.error(f"Error parsing LLM response as YAML: {exc}")
                 return response
