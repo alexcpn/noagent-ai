@@ -39,21 +39,11 @@ Note - You will need an OpenAI API Key/Subscription for running the Client/Agent
 cd code_ast_mcp_server && uv run fastmcp_server.py &
 ```
 
-## Running the Code Search MCP Server
-
-```
-cd code_search_mcp_server && uv run fastmcp_server.py &
-```
-
-You can expose the above vi Ngrok `ngrok http http://localhost:7860`
-
-
-
 ## 2. Running the Code Review Agent
 
 ```
 cd llm-mcp-code-review-agent && \
-CODE_AST_MCP_SERVER_URL=http://127.0.0.1:7860/mcp CODE_SEARCH_MCP_SERVER_URL=http://127.0.0.1:7861/mcp uv run uvicorn code_review_agent:app --host 0.0.0.0 --port 8860
+CODE_AST_MCP_SERVER_URL=http://127.0.0.1:7860/mcp uv run uvicorn task_review_agent:app --host 0.0.0.0 --port 8860
 ```
 
 since we are running the  MCP Servers locally for now
