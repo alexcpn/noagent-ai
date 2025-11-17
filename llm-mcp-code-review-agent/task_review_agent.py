@@ -68,12 +68,27 @@ SEARCH_MCP_SERVER_URL = os.getenv(
 )
 
 
-# Initialize OpenAI client with OpenAI's official base URL
+# # Initialize OpenAI client with OpenAI's official base URL
+# openai_client = OpenAI(
+#     api_key=api_key,
+#     base_url="https://api.openai.com/v1"
+# )
+# MODEL_NAME = "gpt-4.1-nano"
+
+# ollama
+# openai_client = OpenAI(
+#     api_key="sk-local",
+#     base_url="http://localhost:11434/v1"
+# )
+# MODEL_NAME= "phi3.5"
+
 openai_client = OpenAI(
-    api_key=api_key,
-    base_url="https://api.openai.com/v1"
+    api_key="sk-local",
+    base_url="http://localhost:8080/v1"
 )
-MODEL_NAME = "gpt-4.1-nano"
+MODEL_NAME= "phi3.5"
+
+
 FALLBACK_MODEL_NAME = os.getenv("YAML_REPAIR_MODEL", "gpt-4o-mini")
 FALLBACK_MAX_BUDGET = float(os.getenv("YAML_REPAIR_MAX_BUDGET", "0.2"))
 
