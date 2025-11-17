@@ -52,6 +52,5 @@ since we are running the  MCP Servers locally for now
 ## 3. Running the Test Client
 
 ```
-cd llm-mcp-code-review-agent
 $ uv run  client.py --repo-url https://github.com/huggingface/accelerate --pr-number 3321
 ```

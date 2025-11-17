@@ -62,11 +62,6 @@ AST_MCP_SERVER_URL = os.getenv(
     "http://127.0.0.1:7860/mcp",
 )
 
-SEARCH_MCP_SERVER_URL = os.getenv(
-    "CODE_SEARCH_MCP_SERVER_URL",
-    "http://127.0.0.1:7861/mcp",
-)
-
 
 # # Initialize OpenAI client with OpenAI's official base URL
 # openai_client = OpenAI(
@@ -75,21 +70,23 @@ SEARCH_MCP_SERVER_URL = os.getenv(
 # )
 # MODEL_NAME = "gpt-4.1-nano"
 
-# ollama
-# openai_client = OpenAI(
-#     api_key="sk-local",
-#     base_url="http://localhost:11434/v1"
-# )
-# MODEL_NAME= "phi3.5"
-
+# ollama client
 openai_client = OpenAI(
     api_key="sk-local",
-    base_url="http://localhost:8080/v1"
-)
-MODEL_NAME= "phi3.5"
+    base_url="http://localhost:11434/v1"
+ )
+
+# vllm client
+# openai_client = OpenAI(
+#     api_key="sk-local",
+#     base_url="http://localhost:8080/v1"
+# )
+
+MODEL_NAME= "phi3.5" # unusable ollama model 
+MODEL_NAME= "gemma3"
 
 
-FALLBACK_MODEL_NAME = os.getenv("YAML_REPAIR_MODEL", "gpt-4o-mini")
+FALLBACK_MODEL_NAME = os.getenv("YAML_REPAIR_MODEL", )
 FALLBACK_MAX_BUDGET = float(os.getenv("YAML_REPAIR_MAX_BUDGET", "0.2"))
 
 # openai_client = OpenAI(
@@ -104,7 +101,7 @@ app = FastAPI()
     
     # add current directory path
 
-TEMPLATE_PATH = Path(__file__).parent / "code_review_prompts.txt"
+TEMPLATE_PATH = Path(__file__).parent / "prompts/code_review_prompts.txt"
 
 def extract_code_blocks(text: str) -> list[str]:
     # Match ```lang (optional) ... ``` with DOTALL so newlines are included.
@@ -129,7 +126,7 @@ def parse_yaml_response_with_repair(
         data = yaml.safe_load(yaml_payload)
         return data or {}, yaml_payload
     except yaml.YAMLError as exc:
-        log.error("%s: YAML parse failed: %s", context_label, exc)
+        log.error("%s: YAML parse failed: %s", yaml_payload, exc)
         if repair_command is None:
             raise
         repair_prompt_parts = [
@@ -262,7 +259,23 @@ async def _execute_step_tools(
         tool_outputs.append(tool_result)
     return tool_outputs
 
-
+def load_prompt(**placeholders) -> str:
+    template = TEMPLATE_PATH.read_text(encoding="utf-8")
+    default_values = {
+        "arch_notes_or_empty": "",
+        "guidelines_list_or_link": "",
+        "threat_model_or_empty": "",
+        "perf_slos_or_empty": "",
+        "tool_outputs": "",
+        "diff_or_code_block": "",
+    }
+    merged = {**default_values, **placeholders}
+    for key, value in merged.items():
+        value_str = str(value)
+        template = template.replace(f"{{{{{key}}}}}", value_str)
+        template = template.replace(f"{{{key}}}", value_str)
+    return template
+    
 async def main(repo_url, pr_number):
 
     # Example: get the diff for a specific PR
@@ -272,34 +285,31 @@ async def main(repo_url, pr_number):
     #  Command to Call the LLM with a budget ( 0.5 Dollars)
     call_llm_command = CallLLM(openai_client, "Call the LLM with the given context",
                                MODEL_NAME, COST_PER_TOKEN_INPUT, COST_PER_TOKEN_OUTPUT, 0.5)
+    repair_llm_command = call_llm_command # for now; or use a better or cheaper model
+    # repair_llm_command = CallLLM(
+    #     openai_client,
+    #     "Repair invalid YAML responses",
+    #     FALLBACK_MODEL_NAME,
+    #     COST_PER_TOKEN_INPUT,
+    #     COST_PER_TOKEN_OUTPUT,
+    #     FALLBACK_MAX_BUDGET,
+    # )
 
-    repair_llm_command = CallLLM(
-        openai_client,
-        "Repair invalid YAML responses",
-        FALLBACK_MODEL_NAME,
-        COST_PER_TOKEN_INPUT,
-        COST_PER_TOKEN_OUTPUT,
-        FALLBACK_MAX_BUDGET,
-    )
+    # read the task schema.yaml file
+    sample_task_schema_file = "schemas/task_schema.yaml"
+    with open(sample_task_schema_file, "r", encoding="utf-8") as f:
+        task_schema_content = f.read()
 
+    sample_step_schema_file = "schemas/steps_schema.yaml"
+    log.info(f"Using step schema file: {sample_step_schema_file}")
+    with open(sample_step_schema_file, "r", encoding="utf-8") as f:
+        step_schema_content = f.read()
 
-    def load_prompt(**placeholders) -> str:
-        template = TEMPLATE_PATH.read_text(encoding="utf-8")
-        default_values = {
-            "arch_notes_or_empty": "",
-            "guidelines_list_or_link": "",
-            "threat_model_or_empty": "",
-            "perf_slos_or_empty": "",
-            "tool_outputs": "",
-            "diff_or_code_block": "",
-        }
-        merged = {**default_values, **placeholders}
-        for key, value in merged.items():
-            value_str = str(value)
-            template = template.replace(f"{{{{{key}}}}}", value_str)
-            template = template.replace(f"{{{key}}}", value_str)
-        return template
-
+    tool_schemas = "schemas/tools.yaml"
+    log.info(f"Using  tools file: {tool_schemas}")
+    with open(tool_schemas, "r", encoding="utf-8") as f:
+        tool_schemas_content = f.read()
+        
     # this this the MCP client invoking the tool - the code review MCP server
     async with Client(AST_MCP_SERVER_URL) as ast_tool_client:
 
@@ -311,37 +321,20 @@ async def main(repo_url, pr_number):
         ast_tool_schema = await ast_tool_list_command.execute(None)
         log.info(f"AST Tool schema: {ast_tool_schema}")
 
-        # read the task schema.yaml file
-        sample_task_schema_file = "task_schema.yaml"
-        with open(sample_task_schema_file, "r", encoding="utf-8") as f:
-            task_schema_content = f.read()
-
-        sample_step_schema_file = "steps_schema.yaml"
-        log.info(f"Using step schema file: {sample_step_schema_file}")
-        with open(sample_step_schema_file, "r", encoding="utf-8") as f:
-            step_schema_content = f.read()
-
-        tool_schemas = "tools.yaml"
-        log.info(f"Using  tools file: {tool_schemas}")
-        with open(tool_schemas, "r", encoding="utf-8") as f:
-            tool_schemas_content = f.read()
 
         file_diffs = git_utils.get_pr_diff_url(repo_url, pr_number)
 
-        main_context = f"""
-        Your task today is Code Reivew. You are given the following '{pr_number}' to review from the repo '{repo_url}' 
+        main_context = f""" Your task today is Code Reivew. You are given the following '{pr_number}' to review from the repo '{repo_url}' 
         You have to first come up with a plan to review the code changes in the PR as a series of steps.
-        For the review, check for adherence to code standards, correctness of implementation, test coverage,
-        and impact on existing functionality.   You can split these also as different steps in your plan.
         Write the plan as per the following step schema: {step_schema_content}
         Make sure to follow the step schema format exactly and output only the yaml between codeblocks ``` and  ```.
         """
         log.info("-"*80)
-        log.info(
-            f"Generating code review plan for PR #{pr_number} from {repo_url}")
-        log.info("-"*80)
+        log.info(f"Generating code review plan for PR #{pr_number} from {repo_url}")
         context = main_context
+        stepcount = 0
         for file_path, diff in file_diffs.items():
+            stepcount += 1
             log.info("-"*80)
             context = main_context + f" Here is the file diff for {file_path}:\n{diff} for review\n" + \
                 f"You have access to the following MCP tools to help you with your code review: {tool_schemas_content}"
@@ -349,67 +342,45 @@ async def main(repo_url, pr_number):
             # log.info the response
             log.info(f"LLM response: {response}")
             # parse the yaml response to check if its a plan or final review
-            try:
+            response_data, _ = parse_yaml_response_with_repair(
+                response_text=response or "",
+                schema_hint=step_schema_content,
+                repair_command=repair_llm_command,
+                context_label="plan",
+            )
+            with open(f"./logs/step_{stepcount}_{time_hash}.yaml", "w", encoding="utf-8") as f:
+                yaml.dump(response_data, f)
+            # Now go through the steps for this file diff and execute it and
+            # append that to the context for next iteration
+            steps = response_data.get("steps", [])
+            summary = response_data.get("summary", "")
+            log.info(f"Generated plan summary: for step {stepcount} {summary}" )
+            for index, step in enumerate(steps, start=1):
+                name = step.get("name", "<unnamed>")
+                step_description = step.get("description", "")
+                log.info(f"Step {index}: {name}")
+                log.info(f"Description: {step_description}")
+                tool_outputs = await _execute_step_tools(step, ast_tool_call_command)
+                for output_index, output in enumerate(tool_outputs, start=1):
+                    log.info("Tool result %s for step %s: %s",
+                                output_index, name, output)
+                tool_result_context = load_prompt(repo_name=repo_url, brief_change_summary=step_description,
+                                                    diff_or_code_block=diff, tool_outputs=output)
+                log.info(f"combined tool_result_context ={tool_result_context}")
+
+                response = call_llm_command.execute(tool_result_context)
+                # log.info the response
+                log.info(f"LLM response after tool call: {response}")
+                # write this response to a yaml file
                 response_data, _ = parse_yaml_response_with_repair(
                     response_text=response or "",
-                    schema_hint=step_schema_content,
+                    schema_hint=None,
                     repair_command=repair_llm_command,
-                    context_label="plan",
+                    context_label=f"step {name} result",
                 )
-                # Now go through the steps for this file diff and execute it and
-                # append that to the context for next iteration
-                steps = response_data.get("steps", [])
-                summary = response_data.get("summary", "")
-                log.info(f"Generated plan summary: {summary}")
-                for index, step in enumerate(steps, start=1):
-                    if not isinstance(step, dict):
-                        log.warning(
-                            "Skipping step %s because it is not a mapping: %r", index, step)
-                        continue
-                    name = step.get("name", "<unnamed>")
-                    step_description = step.get("description", "")
-                    log.info(f"Step {index}: {name}")
-                    log.info(f"Description: {step_description}")
-                    tool_outputs = await _execute_step_tools(step, ast_tool_call_command)
-                    for output_index, output in enumerate(tool_outputs, start=1):
-                        log.info("Tool result %s for step %s: %s",
-                                 output_index, name, output)
-                    tool_result_context = load_prompt(repo_name=repo_url, brief_change_summary=step_description,
-                                                      diff_or_code_block=diff, tool_outputs=output)
-                    log.info(
-                        f"combined tool_result_context ={tool_result_context}")
-
-                    response = call_llm_command.execute(tool_result_context)
-                    # log.info the response
-                    log.info(f"LLM response after tool call: {response}")
-                    # write this response to a yaml file
-                    try:
-                        response_data, _ = parse_yaml_response_with_repair(
-                            response_text=response or "",
-                            schema_hint=None,
-                            repair_command=repair_llm_command,
-                            context_label=f"step {name} result",
-                        )
-                        with open(f"./logs/step_out_{name}_{time_hash}.yaml", "w", encoding="utf-8") as f:
-                            yaml.dump(response_data, f)
-                    except Exception as exc:
-                        log.error(f"Error parsing LLM response as YAML: {exc}")
-                        continue
-
-            except Exception as exc:
-                log.error(f"Unable to parse plan YAML even after repair: {exc}")
-                return response
-            with open(f"./logs/step_{time_hash}.yaml", "w", encoding="utf-8") as f:
-                yaml.dump(response_data, f)
-            return
-        # ------------------------------------------------------------------
-        # go throught the parsed response_data to see if its a plan or final review
-        # ------------------------------------------------------------------
-
-        # ------------------------------------------------------------------
-        # Execute each step in the plan
-        # ------------------------------------------------------------------
-
+                with open(f"./logs/step_{stepcount}_{name}_done_{time_hash}.yaml", "w", encoding="utf-8") as f:
+                    yaml.dump(response_data, f)
+ 
         def get_prompt_for_step(name, desc):
             return f"""
                 You are an expert task executor.
@@ -418,7 +389,9 @@ async def main(repo_url, pr_number):
                 You have access to the following MCP tools to help you with your code review: {tool_schemas_content} 
                 Make sure to follow the task schema format exactly and output only the yaml between codeblocks ``` and  ```.
                 """
-
+        # ------------------------------------------------------------------
+        # Execute each step in the plan
+        # ------------------------------------------------------------------
         for index, step in enumerate(steps, start=1):
             if not isinstance(step, dict):
                 log.warning(
@@ -432,16 +405,12 @@ async def main(repo_url, pr_number):
             # log.info the response
             log.debug(f"LLM response: {response}")
             # parse the yaml response to check if its a plan or final review
-            try:
-                response_data, _ = parse_yaml_response_with_repair(
-                    response_text=response or "",
-                    schema_hint=task_schema_content,
-                    repair_command=repair_llm_command,
-                    context_label=f"task plan {name}",
-                )
-            except Exception as exc:
-                log.error(f"Error parsing LLM response as YAML: {exc}")
-                return response
+            response_data, _ = parse_yaml_response_with_repair(
+                response_text=response or "",
+                schema_hint=task_schema_content,
+                repair_command=repair_llm_command,
+                context_label=f"task plan {name}",
+            )
             log.info(f"Response data for step {name}: {response_data}")
 
             tasks = response_data.get("tasks", [])
@@ -458,49 +427,6 @@ async def main(repo_url, pr_number):
                 with open(f"./logs/task_{name}_{task_name}_{time_hash}.yaml", "w", encoding="utf-8") as f:
                     yaml.dump(step, f)
 
-            # Check if the response is a valid JSON
-            # if response.startswith("TOOL_CALL:"):
-            #     # Extract the JSON part
-            #     response = response[len("TOOL_CALL:"):].strip()
-            #     log.info(f"Extracted JSON: {response}")
-            #     try:
-            #         tool_call_payload = json.loads(response)
-            #     except json.JSONDecodeError as exc:
-            #         tool_result = f"Invalid JSON response from LLM. Error: {exc}. Original payload: {response}"
-            #         isSuceess = False
-            #     else:
-            #         server_target = str(tool_call_payload.get("server", "ast")).lower()
-            #         if server_target == "search":
-            #                 command = search_tool_call_command
-            #         elif server_target == "ast":
-            #             command = ast_tool_call_command
-            #         else:
-            #             command = None
-            #             tool_result = (
-            #                 f"Unknown server '{server_target}'. Please set 'server' to either 'ast' or 'search'."
-            #             )
-            #             isSuceess = False
-            #         if command:
-            #             tool_result,isSuceess =await command.execute(response)
-            #     log.info(f"Tool result: {tool_result}")
-            #     # check before adding to context
-            #     temp =context + f"Tool call result: {tool_result}"
-            #     if num_tokens_from_string(temp) < MAX_CONTEXT_LENGTH-10:
-            #         context = temp
-            #     else:
-            #         log.warning("Context too long, not adding tool result to context.")
-            if "DONE" in response:
-                log.info("LLM finished the code review")
-                log.info("-"*80)
-                break  # break out of the loop
-            else:
-                # add to the context and continue
-                temp = context + f"LLM response: {response}"
-                if num_tokens_from_string(temp) < MAX_CONTEXT_LENGTH-10:
-                    context = temp
-                else:
-                    log.info(
-                        "Context too long, not adding LLM response to context.")
     call_llm_command.get_total_cost()
     return context
 
