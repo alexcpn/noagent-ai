@@ -83,7 +83,7 @@ openai_client = OpenAI(
 # )
 
 MODEL_NAME= "phi3.5" # unusable ollama model 
-MODEL_NAME= "gemma3"
+MODEL_NAME= "gemma"
 
 
 FALLBACK_MODEL_NAME = os.getenv("YAML_REPAIR_MODEL", )
@@ -340,7 +340,7 @@ async def main(repo_url, pr_number):
                 f"You have access to the following MCP tools to help you with your code review: {tool_schemas_content}"
             response = call_llm_command.execute(context)
             # log.info the response
-            log.info(f"LLM response: {response}")
+            log.info(f"LLM response for step{stepcount}: {response}")
             # parse the yaml response to check if its a plan or final review
             response_data, _ = parse_yaml_response_with_repair(
                 response_text=response or "",

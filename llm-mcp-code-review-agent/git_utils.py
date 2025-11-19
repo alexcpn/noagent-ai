@@ -12,7 +12,7 @@ def get_pr_diff_url(repo_url, pr_number):
         pr_number (int): The pull request number.
     """
     pr_diff_url = f"https://patch-diff.githubusercontent.com/raw/{repo_url.split('/')[-2]}/{repo_url.split('/')[-1]}/pull/{pr_number}.diff"
-    response = requests.get(pr_diff_url)
+    response = requests.get(pr_diff_url,verify=False)
 
     if response.status_code != 200:
         log.info(f"Failed to fetch diff: {response.status_code}")
